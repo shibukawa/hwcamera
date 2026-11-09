@@ -1,0 +1,119 @@
+// Package sys binds the Media Foundation, COM and configuration-manager
+// entry points used by the Windows camera backend. Flat functions go through
+// golang.org/x/sys/windows lazy DLL loading and COM interfaces are called
+// through their vtables with syscall.SyscallN, so no cgo is required.
+//
+// This file and hresult.go are plain Go so that the GUID tables and result
+// codes can be unit tested on any OS; everything that calls into Windows is
+// in the windows-tagged files.
+//
+// Names of constants, GUIDs and structures follow the Windows SDK headers
+// (mfapi.h, mfidl.h, mfreadwrite.h, mfobjects.h, mferror.h, devpkey.h) so
+// that they can be verified against them.
+package sys
+
+import "fmt"
+
+// GUID is a COM/Windows GUID with the C layout (16 bytes).
+type GUID struct {
+	Data1 uint32
+	Data2 uint16
+	Data3 uint16
+	Data4 [8]byte
+}
+
+func (g GUID) String() string {
+	return fmt.Sprintf("{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+		g.Data1, g.Data2, g.Data3, g.Data4[0], g.Data4[1],
+		g.Data4[2], g.Data4[3], g.Data4[4], g.Data4[5], g.Data4[6], g.Data4[7])
+}
+
+func guid(d1 uint32, d2, d3 uint16, b0, b1, b2, b3, b4, b5, b6, b7 byte) GUID {
+	return GUID{Data1: d1, Data2: d2, Data3: d3, Data4: [8]byte{b0, b1, b2, b3, b4, b5, b6, b7}}
+}
+
+// FourCC returns the little-endian FOURCC code of a four-character string
+// (the FCC macro in mfapi.h).
+func FourCC(s string) uint32 {
+	return uint32(s[0]) | uint32(s[1])<<8 | uint32(s[2])<<16 | uint32(s[3])<<24
+}
+
+// VideoSubtype builds a Media Foundation video subtype GUID from a FOURCC
+// or D3DFORMAT value: {XXXXXXXX-0000-0010-8000-00AA00389B71}
+// (DEFINE_MEDIATYPE_GUID in mfapi.h).
+func VideoSubtype(code uint32) GUID {
+	return guid(code, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71)
+}
+
+// D3DFORMAT values used as subtype codes (d3d9types.h).
+const (
+	D3DFMT_A8R8G8B8 = 21 // MFVideoFormat_ARGB32
+	D3DFMT_X8R8G8B8 = 22 // MFVideoFormat_RGB32
+)
+
+// Interface identifiers.
+var (
+	IID_IUnknown        = guid(0x00000000, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
+	IID_IMFAttributes   = guid(0x2cd2d921, 0xc447, 0x44a7, 0xa1, 0x3c, 0x4a, 0xda, 0xbf, 0xc2, 0x47, 0xe3)
+	IID_IMFMediaType    = guid(0x44ae0fa8, 0xea31, 0x4109, 0x8d, 0x2e, 0x4c, 0xae, 0x49, 0x97, 0xc5, 0x55)
+	IID_IMFSample       = guid(0xc40a00f2, 0xb93a, 0x4d80, 0xae, 0x8c, 0x5a, 0x1c, 0x63, 0x4f, 0x58, 0xe4)
+	IID_IMFMediaBuffer  = guid(0x045fa593, 0x8799, 0x42b8, 0xbc, 0x8d, 0x89, 0x68, 0xc6, 0x45, 0x35, 0x07)
+	IID_IMF2DBuffer     = guid(0x7dc9d5f9, 0x9ed9, 0x44ec, 0x9b, 0xbf, 0x06, 0x00, 0xbb, 0x58, 0x9f, 0xbb)
+	IID_IMF2DBuffer2    = guid(0x33ae5ea6, 0x4316, 0x436f, 0x8d, 0xdd, 0xd7, 0x3d, 0x22, 0xf8, 0x29, 0xec)
+	IID_IMFActivate     = guid(0x7fee9e9a, 0x4a89, 0x47a6, 0x89, 0x9c, 0xb6, 0xa5, 0x3a, 0x70, 0xfb, 0x67)
+	IID_IMFMediaSource  = guid(0x279a808d, 0xaec7, 0x40c8, 0x9c, 0x6b, 0xa6, 0xb4, 0x92, 0xc7, 0x8a, 0x66)
+	IID_IMFSourceReader = guid(0x70ae66f2, 0xc809, 0x4e4f, 0x89, 0x15, 0xbd, 0xcb, 0x40, 0x6b, 0x79, 0x93)
+)
+
+// Media types and video subtypes (mfapi.h).
+var (
+	MFMediaType_Video = guid(0x73646976, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71)
+
+	MFVideoFormat_NV12   = VideoSubtype(FourCC("NV12"))
+	MFVideoFormat_YUY2   = VideoSubtype(FourCC("YUY2"))
+	MFVideoFormat_UYVY   = VideoSubtype(FourCC("UYVY"))
+	MFVideoFormat_I420   = VideoSubtype(FourCC("I420"))
+	MFVideoFormat_IYUV   = VideoSubtype(FourCC("IYUV"))
+	MFVideoFormat_MJPG   = VideoSubtype(FourCC("MJPG"))
+	MFVideoFormat_RGB32  = VideoSubtype(D3DFMT_X8R8G8B8)
+	MFVideoFormat_ARGB32 = VideoSubtype(D3DFMT_A8R8G8B8)
+)
+
+// Media type attributes (mfapi.h).
+var (
+	MF_MT_MAJOR_TYPE               = guid(0x48eba18e, 0xf8c9, 0x4687, 0xbf, 0x11, 0x0a, 0x74, 0xc9, 0xf9, 0x6a, 0x8f)
+	MF_MT_SUBTYPE                  = guid(0xf7e34c9a, 0x42e8, 0x4714, 0xb7, 0x4b, 0xcb, 0x29, 0xd7, 0x2c, 0x35, 0xe5)
+	MF_MT_FRAME_SIZE               = guid(0x1652c33d, 0xd6b2, 0x4012, 0xb8, 0x34, 0x72, 0x03, 0x08, 0x49, 0xa3, 0x7d)
+	MF_MT_FRAME_RATE               = guid(0xc459a2e8, 0x3d2c, 0x4e44, 0xb1, 0x32, 0xfe, 0xe5, 0x15, 0x6c, 0x7b, 0xb0)
+	MF_MT_DEFAULT_STRIDE           = guid(0x644b4e48, 0x1e02, 0x4516, 0xb0, 0xeb, 0xc0, 0x1c, 0xa9, 0xd4, 0x9a, 0xc6)
+	MF_MT_MINIMUM_DISPLAY_APERTURE = guid(0xd7388766, 0x18fe, 0x48c6, 0xa1, 0x77, 0xee, 0x89, 0x48, 0x67, 0xc8, 0xc4)
+)
+
+// Source reader attributes (mfreadwrite.h).
+var (
+	MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING          = guid(0xfb394f3d, 0xccf1, 0x42ee, 0xbb, 0xb3, 0xf9, 0xb8, 0x45, 0xd5, 0x68, 0x1d)
+	MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING = guid(0x0f81da2c, 0xb537, 0x4672, 0xa8, 0xb2, 0xa6, 0x81, 0xb1, 0x73, 0x07, 0xa3)
+	MF_READWRITE_DISABLE_CONVERTERS                   = guid(0x98d5b065, 0x1374, 0x4847, 0x8d, 0x5d, 0x31, 0x52, 0x0f, 0xee, 0x71, 0x56)
+)
+
+// Device source attributes (mfidl.h).
+var (
+	MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE                      = guid(0xc60ac5fe, 0x252a, 0x478f, 0xa0, 0xef, 0xbc, 0x8f, 0xa5, 0xf7, 0xca, 0xd3)
+	MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID          = guid(0x8ac3587a, 0x4ae7, 0x42d8, 0x99, 0xe0, 0x0a, 0x60, 0x13, 0xee, 0xf9, 0x0f)
+	MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME                    = guid(0x60d0e559, 0x52f8, 0x4fa2, 0xbb, 0xce, 0xac, 0xdb, 0x34, 0xa8, 0xec, 0x01)
+	MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK = guid(0x58f0aad8, 0x22bf, 0x4f8a, 0xbb, 0x3d, 0xd2, 0xc4, 0x97, 0x8c, 0x6e, 0x2f)
+)
+
+// DEVPROPKEY mirrors the C struct (devpropdef.h): a property set GUID and a
+// property id. 20 bytes.
+type DEVPROPKEY struct {
+	FmtID GUID
+	PID   uint32
+}
+
+// Device property keys (devpkey.h).
+var (
+	DEVPKEY_Device_InstanceId              = DEVPROPKEY{guid(0x78c34fc8, 0x104a, 0x4aca, 0x9e, 0xa4, 0x52, 0x4d, 0x52, 0x99, 0x6e, 0x57), 256}
+	DEVPKEY_Device_InLocalMachineContainer = DEVPROPKEY{guid(0x8c7ed206, 0x3f8a, 0x4827, 0xb3, 0xab, 0xae, 0x9e, 0x1f, 0xae, 0xfc, 0x6c), 4}
+	DEVPKEY_Device_PhysicalDeviceLocation  = DEVPROPKEY{guid(0x540b947e, 0x8b40, 0x45bc, 0xa8, 0xa2, 0x6a, 0x0b, 0x89, 0x4c, 0xbd, 0xa2), 9}
+)

@@ -1,0 +1,12 @@
+github.com/Eyevinn/mp4ff v0.59.0 h1:FkuG2kEuLCdWw561mRRuIic7ehTH24Oy1OJ1t6AFyAs=
+github.com/Eyevinn/mp4ff v0.59.0/go.mod h1:3EZTsioPJ4xTLZEBBkVWoyd7UHnGp4vzwoEJ7lmr3CQ=
+github.com/ebitengine/purego v0.11.2 h1:WWiTx8rD8zYdOwSj8O/NiNbsOvSAgJMTlyV1XlbUSeU=
+github.com/ebitengine/purego v0.11.2/go.mod h1:DCHPP08djqhNSoTfImcnHYQRZmd0qhakvrozqaEYhGQ=
+github.com/go-test/deep v1.1.0 h1:WOcxcdHcvdgThNXjw0t76K42FXTU7HpNQWHpA2HHNlg=
+github.com/go-test/deep v1.1.0/go.mod h1:5C2ZWiW0ErCdrYzpqxLbTX7MG14M9iiw8DgHncVwcsE=
+github.com/shibukawa/hwmediacodec v0.5.1 h1:5iHKl8NTx5Ge3JsVkrQZlG5hwcOX9dGPfUJyupAzatU=
+github.com/shibukawa/hwmediacodec v0.5.1/go.mod h1:SXQ4zBw9BJdqX+kjunxqXyrJXTj4mTV9rkDjVvlL0v8=
+github.com/shibukawa/hwnpu v0.0.0-20261109005857-aea7411a2fe0 h1:pDwtT3+bzYcimWhj4U+8Yq0i0Sl1ctSgFnZBxdNKkVk=
+github.com/shibukawa/hwnpu v0.0.0-20261109005857-aea7411a2fe0/go.mod h1:cNbtEhcPAiGO0SwcVYteRooFGLwDHPcd/jtUUzBzPv4=
+golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
+golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
