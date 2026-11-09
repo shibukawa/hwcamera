@@ -85,7 +85,14 @@ func list(ctx context.Context, args []string) error {
 		return nil
 	}
 	for _, d := range ds {
-		fmt.Printf("%s  \"%s\"  [%s, %s]\n", d.ID, d.Name, d.Backend, d.Position)
+		tags := []string{d.Backend, d.Position.String()}
+		if d.Default {
+			tags = append(tags, "default")
+		}
+		if d.Virtual {
+			tags = append(tags, "virtual")
+		}
+		fmt.Printf("%s  \"%s\"  [%s]\n", d.ID, d.Name, strings.Join(tags, ", "))
 		for _, m := range d.Modes {
 			fmt.Println("    ", m)
 		}

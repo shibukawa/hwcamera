@@ -189,6 +189,9 @@ func planeBytesPerPixel(f camera.PixelFormat, plane int) int {
 	return 0
 }
 
+// transportVirtual is kIOAudioDeviceTransportTypeVirtual ('virt').
+const transportVirtual = 'v'<<24 | 'i'<<16 | 'r'<<8 | 't'
+
 // deviceKind is what -deviceType says about where the camera is.
 type deviceKind int
 

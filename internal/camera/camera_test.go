@@ -49,3 +49,24 @@ func TestPickFrameRate(t *testing.T) {
 		t.Errorf("100 -> %v, want 60", r)
 	}
 }
+
+func TestSortDevices(t *testing.T) {
+	ds := []DeviceInfo{
+		{ID: "vr", Position: PositionExternal, Virtual: true},
+		{ID: "usb", Position: PositionExternal},
+		{ID: "virtual-default", Default: true, Virtual: true},
+		{ID: "lid", Position: PositionFront},
+		{ID: "iphone", Position: PositionExternal, Default: true},
+	}
+	SortDevices(ds)
+	var got []string
+	for _, d := range ds {
+		got = append(got, d.ID)
+	}
+	want := []string{"iphone", "lid", "usb", "virtual-default", "vr"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order %v, want %v", got, want)
+		}
+	}
+}

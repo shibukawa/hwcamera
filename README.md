@@ -63,6 +63,11 @@ for {
 }
 ```
 
+- With an empty ID, `Open` takes the system's default camera (macOS:
+  the one chosen in Control Center), then built-in cameras, then other
+  physical ones. Virtual cameras (`DeviceInfo.Virtual`: OBS, VR and
+  conferencing drivers, v4l2loopback) are picked only when no physical
+  camera exists; open them by ID. `Devices` returns the same order.
 - The device's closest mode is used (`cam.Mode()`); frames are never
   scaled. Without `WithSize` the camera runs at 1280x720 where it can.
 - `WithFormat` selects the frame format: `NV12` (default), `I420`, `YUYV`,

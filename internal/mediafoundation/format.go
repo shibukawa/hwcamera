@@ -442,6 +442,15 @@ func pldPanel(b []byte) int {
 	return int(b[8]>>3) & 7
 }
 
+// isVirtualLink reports a software camera from its symbolic link: devices
+// enumerated by the root bus (DirectShow/MF filters registered as devices)
+// or created through the virtual camera API of Windows 11 (SWD#VCAMDEVAPI,
+// OBS 30 and later) have no hardware bus in the path.
+func isVirtualLink(symlink string) bool {
+	l := strings.ToLower(symlink)
+	return strings.HasPrefix(l, `\\?\root#`) || strings.HasPrefix(l, `\\?\swd#`)
+}
+
 // positionOf guesses where a camera sits from its symbolic link, the panel
 // of its _PLD (-1 when absent) and whether Windows considers it part of the
 // computer itself (inLocal; nil when unknown).

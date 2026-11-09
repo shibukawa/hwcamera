@@ -135,7 +135,37 @@ type DeviceInfo struct {
 	Name     string
 	Backend  string
 	Position Position
-	Modes    []Mode
+	// Default reports the camera the operating system prefers (macOS:
+	// the one chosen in Control Center). Not every backend knows.
+	Default bool
+	// Virtual reports a software camera (OBS, a VR or video-call
+	// driver, v4l2loopback) rather than a physical one. Open with an empty
+	// ID never picks one while a physical camera exists.
+	Virtual bool
+	Modes   []Mode
+}
+
+// Rank orders devices for automatic choice: the default physical camera,
+// then built-in ones, then other physical ones, then virtual ones.
+func Rank(d DeviceInfo) int {
+	r := 0
+	if d.Virtual {
+		r += 100
+	}
+	switch {
+	case d.Default:
+	case d.Position == PositionFront || d.Position == PositionBack:
+		r += 10
+	default:
+		r += 20
+	}
+	return r
+}
+
+// SortDevices orders devices by preference, keeping the backend's order
+// among equals.
+func SortDevices(ds []DeviceInfo) {
+	sort.SliceStable(ds, func(i, j int) bool { return Rank(ds[i]) < Rank(ds[j]) })
 }
 
 // Config is what the caller asks for. Zero fields mean "pick for me".

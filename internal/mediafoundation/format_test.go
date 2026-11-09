@@ -341,3 +341,15 @@ func TestHRESULTFromWin32(t *testing.T) {
 		t.Fatal("HRESULT_FROM_WIN32")
 	}
 }
+
+func TestIsVirtualLink(t *testing.T) {
+	if !isVirtualLink(`\\?\SWD#VCAMDEVAPI#{6f4e9d3c}#{e5323777-f976-4f5b-9b55-b94699c46e44}\global`) {
+		t.Error("SWD virtual camera not detected")
+	}
+	if !isVirtualLink(`\\?\root#image#0000#{e5323777}\global`) {
+		t.Error("root-enumerated camera not detected")
+	}
+	if isVirtualLink(`\\?\usb#vid_046d&pid_085e&mi_00#7&1a2b&0&0000#{e5323777}\global`) {
+		t.Error("USB camera reported virtual")
+	}
+}

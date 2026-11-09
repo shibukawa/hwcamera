@@ -38,11 +38,42 @@ func (Backend) Devices(ctx context.Context) ([]camera.DeviceInfo, error) {
 	}
 	var out []camera.DeviceInfo
 	withPool(func() {
+		def := preferredID()
 		for _, d := range discover() {
-			out = append(out, describe(d))
+			info := describe(d)
+			info.Default = info.ID == def
+			out = append(out, info)
 		}
 	})
 	return out, nil
+}
+
+// preferredID returns the unique ID of the camera macOS prefers:
+// +systemPreferredCamera (macOS 13; the camera picked in Control Center or
+// the one last used), else +defaultDeviceWithMediaType:.
+func preferredID() string {
+	c := class("AVCaptureDevice")
+	var d objc.ID
+	if responds(c, selSystemPreferredCamera) {
+		d = c.Send(selSystemPreferredCamera)
+	}
+	if d == 0 {
+		d = c.Send(selDefaultDevice, avMediaTypeVideo)
+	}
+	if d == 0 {
+		return ""
+	}
+	return goString(d.Send(selUniqueID))
+}
+
+// isVirtual reports a software camera: -transportType (an
+// IOAudioDeviceTransportType FourCC) is 'virt' for camera extensions and
+// DAL plug-ins that are not hardware (OBS, VR and conferencing drivers).
+func isVirtual(d objc.ID) bool {
+	if !responds(d, selTransportType) {
+		return false
+	}
+	return uint32(objc.Send[int32](d, selTransportType)) == transportVirtual
 }
 
 // discover lists the video capture devices. The discovery session is the
@@ -121,6 +152,7 @@ func describe(d objc.ID) camera.DeviceInfo {
 		Name:     goString(d.Send(selLocalizedName)),
 		Backend:  Name,
 		Position: positionFor(int(d.Send(selPosition)), kindOf(d)),
+		Virtual:  isVirtual(d),
 	}
 	var modes []camera.Mode
 	for _, f := range deviceFormats(d) {

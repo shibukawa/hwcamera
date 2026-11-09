@@ -136,10 +136,14 @@ func probe(path string) (camera.DeviceInfo, error) {
 		Name:     cstr(cp.Card[:]),
 		Backend:  "v4l2",
 		Position: position(cstr(cp.BusInfo[:]), cstr(cp.Driver[:])),
+		Virtual:  virtualDrivers[cstr(cp.Driver[:])],
 		Modes:    modes,
 	}
 	return info, nil
 }
+
+// virtualDrivers are V4L2 drivers of software cameras.
+var virtualDrivers = map[string]bool{"vivid": true, "v4l2 loopback": true, "v4l2loopback": true, "akvcam": true}
 
 func position(bus, driver string) camera.Position {
 	switch {

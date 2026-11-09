@@ -19,14 +19,18 @@ type fakeBackend struct{}
 func (fakeBackend) Name() string    { return "fake" }
 func (fakeBackend) Available() bool { return true }
 func (fakeBackend) Devices(context.Context) ([]camera.DeviceInfo, error) {
-	return []camera.DeviceInfo{{ID: "fake0", Name: "Fake", Backend: "fake", Modes: []camera.Mode{
-		{Format: camera.YUYV, Width: 64, Height: 48, FrameRates: []float64{30}},
-	}}}, nil
+	modes := []camera.Mode{{Format: camera.YUYV, Width: 64, Height: 48, FrameRates: []float64{30}}}
+	// The virtual camera comes first, as macOS listed Immersed Camera
+	// before an iPhone: Open("") must still pick the physical one.
+	return []camera.DeviceInfo{
+		{ID: "vcam", Name: "Virtual", Backend: "fake", Virtual: true, Modes: modes},
+		{ID: "fake0", Name: "Fake", Backend: "fake", Position: camera.PositionExternal, Modes: modes},
+	}, nil
 }
 
 func (fakeBackend) Open(_ context.Context, id string, cfg camera.Config) (camera.Stream, error) {
 	ds, _ := fakeBackend{}.Devices(context.Background())
-	m, err := camera.ChooseMode(ds[0].Modes, cfg)
+	m, err := camera.ChooseMode(ds[1].Modes, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +80,9 @@ func TestOpenConvertsAndReleases(t *testing.T) {
 		cam, err := Open(ctx, "", WithFormat(format))
 		if err != nil {
 			t.Fatal(err)
+		}
+		if cam.Info().ID != "fake0" {
+			t.Fatalf("Open(\"\") picked %s, want the physical camera", cam.Info().ID)
 		}
 		f, err := cam.Read(ctx)
 		if err != nil {

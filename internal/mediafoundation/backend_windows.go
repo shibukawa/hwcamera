@@ -188,6 +188,7 @@ func (Backend) Devices(ctx context.Context) ([]camera.DeviceInfo, error) {
 				Name:     name,
 				Backend:  Name,
 				Position: positionFor(id),
+				Virtual:  isVirtualLink(id),
 				Modes:    modes,
 			})
 		}

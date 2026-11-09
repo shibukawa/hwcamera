@@ -140,3 +140,9 @@ func TestPositionFor(t *testing.T) {
 		}
 	}
 }
+
+func TestTransportVirtual(t *testing.T) {
+	if transportVirtual != 0x76697274 {
+		t.Fatalf("transportVirtual = %#x", transportVirtual)
+	}
+}

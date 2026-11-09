@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -115,6 +116,7 @@ func Devices(ctx context.Context) ([]DeviceInfo, error) {
 	if len(all) == 0 && len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
+	camera.SortDevices(all)
 	return all, nil
 }
 
@@ -156,8 +158,10 @@ type Camera struct {
 	closed bool
 }
 
-// Open opens a camera by DeviceInfo.ID, or the first camera when id is "",
-// and starts capturing.
+// Open opens a camera by DeviceInfo.ID and starts capturing. With an empty
+// id it picks one in the order of Devices: the system's default camera,
+// built-in cameras, other physical cameras, and a virtual camera only when
+// there is no physical one. A camera that fails to open is skipped.
 func Open(ctx context.Context, id string, opts ...Option) (*Camera, error) {
 	cfg := camera.Config{Format: NV12}
 	for _, o := range opts {
@@ -167,6 +171,11 @@ func Open(ctx context.Context, id string, opts ...Option) (*Camera, error) {
 	if len(bs) == 0 {
 		return nil, fmt.Errorf("%w: no camera API on this platform", ErrUnsupported)
 	}
+	type cand struct {
+		b camera.Backend
+		d DeviceInfo
+	}
+	var cands []cand
 	var errs []error
 	for _, b := range bs {
 		ds, err := b.Devices(ctx)
@@ -175,31 +184,50 @@ func Open(ctx context.Context, id string, opts ...Option) (*Camera, error) {
 			continue
 		}
 		for _, d := range ds {
-			if id != "" && d.ID != id {
-				continue
+			if id == "" || d.ID == id {
+				cands = append(cands, cand{b, d})
 			}
-			s, err := b.Open(ctx, d.ID, cfg)
-			if err != nil {
-				if id != "" {
-					return nil, err
-				}
-				errs = append(errs, err)
-				continue
-			}
-			c := &Camera{info: d, stream: s, out: cfg.Format}
-			if c.out == Any {
-				c.out = s.Mode().Format
-			}
-			if s.Mode().Format != c.out {
-				conv, err := pixconv.NewConverter(s.Mode().Format, c.out)
-				if err != nil {
-					s.Close()
-					return nil, fmt.Errorf("%w: %v", ErrUnsupported, err)
-				}
-				c.conv = conv
-			}
-			return c, nil
 		}
+	}
+	if id == "" {
+		sort.SliceStable(cands, func(i, j int) bool { return camera.Rank(cands[i].d) < camera.Rank(cands[j].d) })
+		physical := false
+		for _, c := range cands {
+			physical = physical || !c.d.Virtual
+		}
+		if physical {
+			kept := cands[:0]
+			for _, c := range cands {
+				if !c.d.Virtual {
+					kept = append(kept, c)
+				}
+			}
+			cands = kept
+		}
+	}
+	for _, c := range cands {
+		b, d := c.b, c.d
+		s, err := b.Open(ctx, d.ID, cfg)
+		if err != nil {
+			if id != "" {
+				return nil, err
+			}
+			errs = append(errs, err)
+			continue
+		}
+		c := &Camera{info: d, stream: s, out: cfg.Format}
+		if c.out == Any {
+			c.out = s.Mode().Format
+		}
+		if s.Mode().Format != c.out {
+			conv, err := pixconv.NewConverter(s.Mode().Format, c.out)
+			if err != nil {
+				s.Close()
+				return nil, fmt.Errorf("%w: %v", ErrUnsupported, err)
+			}
+			c.conv = conv
+		}
+		return c, nil
 	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)

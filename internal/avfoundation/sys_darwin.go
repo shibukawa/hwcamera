@@ -223,6 +223,7 @@ var (
 	selDidOutput, selDidDrop                                            objc.SEL
 	selRuntimeError, selDisconnected, selDefaultCenter                  objc.SEL
 	selAddObserver, selRemoveObserver, selUserInfo, selObjectForKey     objc.SEL
+	selTransportType, selSystemPreferredCamera, selDefaultDevice        objc.SEL
 )
 
 func initSelectors() {
@@ -243,6 +244,9 @@ func initSelectors() {
 	selDevices, selDevicesWithMediaType = r("devices"), r("devicesWithMediaType:")
 	selDeviceWithUniqueID = r("deviceWithUniqueID:")
 	selUniqueID, selLocalizedName = r("uniqueID"), r("localizedName")
+	selTransportType = r("transportType")
+	selSystemPreferredCamera = r("systemPreferredCamera")
+	selDefaultDevice = r("defaultDeviceWithMediaType:")
 	selPosition, selDeviceType = r("position"), r("deviceType")
 	selFormats, selFormatDescription = r("formats"), r("formatDescription")
 	selFrameRateRanges = r("videoSupportedFrameRateRanges")
