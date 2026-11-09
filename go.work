@@ -1,0 +1,10 @@
+// Local development: build the examples and the mediacodec module against
+// the hwcamera source in this checkout instead of the released versions in
+// their go.mod files. `go install ...@version` ignores this file.
+go 1.27.0
+
+use (
+	.
+	./examples
+	./mediacodec
+)
