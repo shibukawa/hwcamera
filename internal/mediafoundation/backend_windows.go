@@ -574,6 +574,7 @@ func (s *stream) copySample(sample *sys.IMFSample) (*camera.Frame, error) {
 		return nil, &camera.BackendError{Backend: Name, Op: "copy sample", Err: err}
 	}
 	f.Planes, f.Strides = planes, strides
+	camera.OpaqueAlpha(f) // RGB32 is X8R8G8B8: the fourth byte is padding
 	return f, nil
 }
 

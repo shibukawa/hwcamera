@@ -70,3 +70,13 @@ func TestSortDevices(t *testing.T) {
 		}
 	}
 }
+
+func TestOpaqueAlpha(t *testing.T) {
+	f := &Frame{Width: 2, Height: 2, Format: BGRA, Planes: [][]byte{make([]byte, 24)}, Strides: []int{12}}
+	f.Planes[0][0] = 7
+	OpaqueAlpha(f)
+	p := f.Planes[0]
+	if p[3] != 255 || p[7] != 255 || p[15] != 255 || p[19] != 255 || p[0] != 7 || p[11] != 0 {
+		t.Fatalf("got %v", p)
+	}
+}

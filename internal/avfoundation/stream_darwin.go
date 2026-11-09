@@ -266,6 +266,9 @@ func copyPixelBuffer(pb uintptr) *camera.Frame {
 			return nil
 		}
 		f.Planes, f.Strides = [][]byte{plane}, []int{stride}
+		// Camera extensions (virtual cameras) fill BGRA with alpha 0 as
+		// often as with 255.
+		camera.OpaqueAlpha(f)
 		return f
 	}
 	for p := range n {

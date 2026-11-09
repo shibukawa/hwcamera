@@ -546,6 +546,9 @@ func (s *stream) frame(bf *buffer) *camera.Frame {
 	default:
 		f.Planes, f.Strides = [][]byte{mem[:min(st*h, len(mem))]}, []int{st}
 	}
+	// In place: the buffer is mapped writable and goes back to the driver,
+	// which overwrites all of it.
+	camera.OpaqueAlpha(f)
 	idx := bf.Index
 	s.mu.Lock()
 	s.outstanding++

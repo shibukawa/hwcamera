@@ -27,7 +27,7 @@ an NPU.
 | `.../audio` | Microphone capture: `Devices`, `Open`, `Mic.Read` returning PCM (S16 or F32, any rate and channel count; the OS converts) |
 | `.../tensor` | Frame → input tensor: stretch / letterbox / centre crop, RGB / BGR / gray, NCHW / NHWC, float32 / float16 / uint8 / int8, mean and std; maps model coordinates back to the frame |
 | `.../mediacodec` | Separate module: the camera as a `hwmediacodec.FrameReader`, an encoder sized for the camera, `Record` (camera → encoder → any `PacketWriter`: MP4, HLS, WebRTC) |
-| `.../examples` | Separate module: `record` (MP4), `hls` (live stream to browsers), `npu` (image model on the NPU over camera frames) |
+| `.../examples` | Separate module: `preview` (camera in an Ebitengine window), `record` (MP4), `hls` (live stream to browsers), `npu` (image model on the NPU over camera frames) |
 | `.../cmd/hwcamera` | `list`, `snap`, `check` |
 
 The core module depends only on purego and `golang.org/x/sys`.

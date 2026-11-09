@@ -221,6 +221,25 @@ func SetRelease(f *Frame, fn func()) { f.release = fn }
 // Owned reports whether the frame's memory belongs to Go (Release is a no-op).
 func (f *Frame) Owned() bool { return f.release == nil }
 
+// OpaqueAlpha sets the alpha byte of every pixel of an RGBA or BGRA frame
+// to 255. Backends call it on the frames they deliver: cameras send
+// X8R8G8B8-style formats whose fourth byte is padding (V4L2 XB24/XR24,
+// Media Foundation RGB32) or an alpha of 0 (vivid's AB24), and image/png,
+// Ebitengine and other premultiplied-alpha consumers would draw those
+// pixels transparent.
+func OpaqueAlpha(f *Frame) {
+	if f.Format != RGBA && f.Format != BGRA {
+		return
+	}
+	p, stride := f.Planes[0], f.Strides[0]
+	for y := 0; y < f.Height; y++ {
+		row := p[y*stride:]
+		for x := 3; x < 4*f.Width; x += 4 {
+			row[x] = 255
+		}
+	}
+}
+
 // Stream is an open, running camera.
 type Stream interface {
 	// Mode is the native mode the device was configured with. The frame
