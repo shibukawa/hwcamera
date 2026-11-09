@@ -80,3 +80,43 @@ func TestOpaqueAlpha(t *testing.T) {
 		t.Fatalf("got %v", p)
 	}
 }
+
+func TestKind(t *testing.T) {
+	d := DeviceInfo{Position: PositionBack, Lens: LensUltraWide}
+	if got := d.Kind(); got != KindBack|KindUltraWide|KindPhysical {
+		t.Fatalf("Kind = %s", got)
+	}
+	for k, want := range map[Kind]bool{
+		0: true, KindBack: true, KindBack | KindUltraWide: true, KindPhysical: true,
+		KindFront: false, KindBack | KindWide: false, KindVirtual: false,
+	} {
+		if d.Is(k) != want {
+			t.Errorf("Is(%s) = %v", k, !want)
+		}
+	}
+	if s := (KindFront | KindTelephoto | KindVirtual).String(); s != "front|telephoto|virtual" {
+		t.Errorf("String = %q", s)
+	}
+}
+
+func TestParseKind(t *testing.T) {
+	for in, want := range map[string]Kind{
+		"back":               KindBack,
+		"Rear":               KindBack,
+		"back+ultrawide":     KindBack | KindUltraWide,
+		"front|ultra-wide":   KindFront | KindUltraWide,
+		"back, tele":         KindBack | KindTelephoto,
+		"external physical":  KindExternal | KindPhysical,
+		"front|back|virtual": KindFront | KindBack | KindVirtual,
+	} {
+		got, err := ParseKind(in)
+		if err != nil || got != want {
+			t.Errorf("ParseKind(%q) = %s, %v; want %s", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "/dev/video0", "back+fisheye", "0"} {
+		if _, err := ParseKind(in); err == nil {
+			t.Errorf("ParseKind(%q): no error", in)
+		}
+	}
+}

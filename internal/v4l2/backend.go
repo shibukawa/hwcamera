@@ -135,7 +135,7 @@ func probe(path string) (camera.DeviceInfo, error) {
 		ID:       path,
 		Name:     cstr(cp.Card[:]),
 		Backend:  "v4l2",
-		Position: position(cstr(cp.BusInfo[:]), cstr(cp.Driver[:])),
+		Position: position(cstr(cp.BusInfo[:]), cstr(cp.Driver[:]), usbRemovable(path)),
 		Virtual:  virtualDrivers[cstr(cp.Driver[:])],
 		Modes:    modes,
 	}
@@ -145,11 +145,38 @@ func probe(path string) (camera.DeviceInfo, error) {
 // virtualDrivers are V4L2 drivers of software cameras.
 var virtualDrivers = map[string]bool{"vivid": true, "v4l2 loopback": true, "v4l2loopback": true, "akvcam": true}
 
-func position(bus, driver string) camera.Position {
+// usbRemovable returns the sysfs "removable" attribute of the USB device
+// behind a video node: "fixed" for a port inside the machine (a laptop's
+// webcam), "removable" for a socket, "unknown" when the firmware does not
+// say, and "" for a non-USB node.
+func usbRemovable(path string) string {
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		path = p
+	}
+	// .../usbN/N-P/N-P:1.0/video4linux/videoX: "device" is the
+	// interface, its parent the USB device.
+	dev, err := filepath.EvalSymlinks(filepath.Join("/sys/class/video4linux", filepath.Base(path), "device"))
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(dev), "removable"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func position(bus, driver, removable string) camera.Position {
 	switch {
 	case strings.HasPrefix(bus, "usb-"):
-		// Laptop webcams are USB too; nothing in V4L2 tells them apart
-		// from a plugged-in one.
+		// Laptop webcams are USB too; the firmware's port description
+		// (ACPI _UPC/_PLD) tells an internal port from a socket.
+		switch removable {
+		case "fixed":
+			return camera.PositionFront
+		case "removable":
+			return camera.PositionExternal
+		}
 		return camera.PositionUnknown
 	case strings.HasPrefix(bus, "platform:"):
 		if driver == "vivid" || driver == "v4l2 loopback" || driver == "v4l2loopback" {

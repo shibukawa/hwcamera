@@ -57,7 +57,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hwcamera list | snap [-device ID] [-size WxH] [-o file.png] | check [-frames N] | mics | rec [-device ID] [-o file.wav] [-duration 30s]")
+	fmt.Fprintln(os.Stderr, "usage: hwcamera list | snap [-device ID|front|back+ultrawide] [-size WxH] [-o file.png] | check [-frames N] | mics | rec [-device ID] [-o file.wav] [-duration 30s]")
 	os.Exit(2)
 }
 
@@ -86,6 +86,9 @@ func list(ctx context.Context, args []string) error {
 	}
 	for _, d := range ds {
 		tags := []string{d.Backend, d.Position.String()}
+		if d.Lens != hwcamera.LensUnknown {
+			tags = append(tags, d.Lens.String())
+		}
 		if d.Default {
 			tags = append(tags, "default")
 		}
@@ -113,7 +116,7 @@ func parseSize(s string) (int, int, error) {
 
 func snap(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("snap", flag.ExitOnError)
-	device := fs.String("device", "", "camera ID (see list)")
+	device := fs.String("device", "", "camera ID (see list), or a kind such as front, back or back+ultrawide")
 	size := fs.String("size", "", "WxH (default 1280x720 or nearest)")
 	out := fs.String("o", "frame.png", "output .png or .jpg")
 	skip := fs.Int("skip", 10, "frames to drop first while exposure settles")
@@ -133,7 +136,12 @@ func snap(ctx context.Context, args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cam, err := hwcamera.Open(ctx, *device, opts...)
+	id := *device
+	if k, err := hwcamera.ParseKind(id); err == nil {
+		id = ""
+		opts = append(opts, hwcamera.WithKind(k))
+	}
+	cam, err := hwcamera.Open(ctx, id, opts...)
 	if err != nil {
 		return err
 	}

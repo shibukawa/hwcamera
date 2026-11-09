@@ -75,6 +75,21 @@ for {
   physical ones. Virtual cameras (`DeviceInfo.Virtual`: OBS, VR and
   conferencing drivers, v4l2loopback) are picked only when no physical
   camera exists; open them by ID. `Devices` returns the same order.
+- `WithKind` picks a camera by its traits, combined with `|`: the
+  position (`Front`, `Back`, `External`), the lens (`Wide`, `UltraWide`,
+  `Telephoto`) and `Physical` / `Virtual`. A camera must have every trait:
+
+  ```go
+  cam, err := hwcamera.Open(ctx, "", hwcamera.WithKind(hwcamera.Back|hwcamera.UltraWide))
+  // errors.Is(err, hwcamera.ErrNotFound) when there is none; no fallback
+  ```
+
+  Among the matches the order above applies. `DeviceInfo.Kind()` and
+  `Is(k)` tell a listed camera's traits; `ParseKind("back+ultrawide")`
+  reads them from a flag, and the `-device` flag of the command and the
+  examples takes a kind as well as an ID. The lens is known on iOS,
+  Android (from the 35 mm equivalent focal length) and Mac built-in
+  cameras; Front/Back on phones, Macs, Windows and Linux laptops.
 - The device's closest mode is used (`cam.Mode()`); frames are never
   scaled. Without `WithSize` the camera runs at 1280x720 where it can.
 - `WithFormat` selects the frame format: `NV12` (default), `I420`, `YUYV`,
@@ -176,6 +191,9 @@ a model; that saves one conversion. See `examples/npu`.
   media-controller pipeline (Intel IPU6, some Arm boards) need libcamera and
   are not listed.
 - Only 64-bit kernels (`struct v4l2_buffer` differs on 32-bit ones).
+- A USB camera on a port the firmware marks as internal (sysfs
+  `removable` = `fixed`, the laptop's webcam) is `Front`, one on a socket
+  `External`; without that information the position is unknown.
 - `ENOSPC` from `VIDIOC_STREAMON` means not enough USB bandwidth: choose
   MJPEG or a smaller size, or move a second camera to another bus.
 

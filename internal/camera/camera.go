@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,6 +87,103 @@ func (p Position) String() string {
 	return "unknown"
 }
 
+// Lens tells which lens of a multi-camera phone a camera is.
+type Lens int
+
+const (
+	LensUnknown   Lens = iota
+	LensWide           // the main lens (about 24-28 mm equivalent)
+	LensUltraWide      // the 0.5x lens
+	LensTelephoto      // a 2x or longer lens
+)
+
+func (l Lens) String() string {
+	switch l {
+	case LensWide:
+		return "wide"
+	case LensUltraWide:
+		return "ultrawide"
+	case LensTelephoto:
+		return "telephoto"
+	}
+	return "unknown"
+}
+
+// Kind is a set of camera traits, combined with |. A camera matches a
+// Kind when it has every trait in it: Back|UltraWide is the back
+// ultra-wide camera, and Front|Back matches nothing.
+type Kind uint32
+
+const (
+	KindFront Kind = 1 << iota
+	KindBack
+	KindExternal
+	KindWide
+	KindUltraWide
+	KindTelephoto
+	KindPhysical
+	KindVirtual
+)
+
+var kindNames = []struct {
+	k    Kind
+	name string
+}{
+	{KindFront, "front"}, {KindBack, "back"}, {KindExternal, "external"},
+	{KindWide, "wide"}, {KindUltraWide, "ultrawide"}, {KindTelephoto, "telephoto"},
+	{KindPhysical, "physical"}, {KindVirtual, "virtual"},
+}
+
+func (k Kind) String() string {
+	if k == 0 {
+		return "any"
+	}
+	var parts []string
+	for _, n := range kindNames {
+		if k&n.k != 0 {
+			parts = append(parts, n.name)
+			k &^= n.k
+		}
+	}
+	if k != 0 {
+		parts = append(parts, fmt.Sprintf("Kind(%#x)", uint32(k)))
+	}
+	return strings.Join(parts, "|")
+}
+
+// ParseKind parses traits such as "back", "back+ultrawide" or
+// "front|physical" (separated by +, |, comma or space; case does not
+// matter; "rear", "ultra-wide" and "tele" are accepted too).
+func ParseKind(s string) (Kind, error) {
+	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return r == '+' || r == '|' || r == ',' || r == ' '
+	})
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("hwcamera: empty camera kind")
+	}
+	var k Kind
+	for _, f := range fields {
+		f = strings.NewReplacer("-", "", "_", "").Replace(f)
+		switch f {
+		case "rear":
+			f = "back"
+		case "tele":
+			f = "telephoto"
+		}
+		found := false
+		for _, n := range kindNames {
+			if n.name == f {
+				k |= n.k
+				found = true
+			}
+		}
+		if !found {
+			return 0, fmt.Errorf("hwcamera: unknown camera kind %q", f)
+		}
+	}
+	return k, nil
+}
+
 // Mode is one capture mode a device offers: its native pixel format, size
 // and the frame rates it can run at.
 type Mode struct {
@@ -135,6 +233,9 @@ type DeviceInfo struct {
 	Name     string
 	Backend  string
 	Position Position
+	// Lens is the kind of lens (iOS, Android and Mac built-in cameras;
+	// unknown elsewhere).
+	Lens Lens
 	// Default reports the camera the operating system prefers (macOS:
 	// the one chosen in Control Center). Not every backend knows.
 	Default bool
@@ -144,6 +245,36 @@ type DeviceInfo struct {
 	Virtual bool
 	Modes   []Mode
 }
+
+// Kind returns the traits of the camera.
+func (d DeviceInfo) Kind() Kind {
+	var k Kind
+	switch d.Position {
+	case PositionFront:
+		k |= KindFront
+	case PositionBack:
+		k |= KindBack
+	case PositionExternal:
+		k |= KindExternal
+	}
+	switch d.Lens {
+	case LensWide:
+		k |= KindWide
+	case LensUltraWide:
+		k |= KindUltraWide
+	case LensTelephoto:
+		k |= KindTelephoto
+	}
+	if d.Virtual {
+		k |= KindVirtual
+	} else {
+		k |= KindPhysical
+	}
+	return k
+}
+
+// Is reports whether the camera has every trait of k (always true for 0).
+func (d DeviceInfo) Is(k Kind) bool { return d.Kind()&k == k }
 
 // Rank orders devices for automatic choice: the default physical camera,
 // then built-in ones, then other physical ones, then virtual ones.
@@ -181,6 +312,9 @@ type Config struct {
 	// Buffers is the number of driver buffers in flight (V4L2), 0 for the
 	// backend default.
 	Buffers int
+	// Kind restricts which camera the public Open picks; backends ignore
+	// it.
+	Kind Kind
 }
 
 // Frame is one captured picture.

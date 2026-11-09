@@ -356,7 +356,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	switch {
 	case len(g.devices) > 0:
 		d := g.devices[g.index]
-		fmt.Fprintf(&b, "[%d/%d] %s (%s, %s)\n", g.index+1, len(g.devices), d.Name, d.Backend, d.Position)
+		fmt.Fprintf(&b, "[%d/%d] %s (%s, %s)\n", g.index+1, len(g.devices), d.Name, d.Backend, d.Kind())
 	}
 	if g.cam != nil {
 		fmt.Fprintf(&b, "%s -> %s  %.1f fps\n", g.cam.cam.Mode(), g.cam.cam.Format(), g.cam.fps())

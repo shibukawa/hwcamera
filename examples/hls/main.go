@@ -44,7 +44,7 @@ start();
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
-	device := flag.String("device", "", "camera ID; empty for the first camera")
+	device := flag.String("device", "", "camera ID (hwcamera list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
 	codecName := flag.String("codec", "h264", "h264 or hevc (HEVC plays in Safari only)")
 	size := flag.String("size", "1280x720", "capture size")
 	fps := flag.Float64("fps", 30, "frame rate")
@@ -63,7 +63,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	cam, err := hwcamera.Open(ctx, *device, hwcamera.WithSize(w, h), hwcamera.WithFrameRate(*fps))
+	id, opts := *device, []hwcamera.Option{hwcamera.WithSize(w, h), hwcamera.WithFrameRate(*fps)}
+	if k, err := hwcamera.ParseKind(id); err == nil { // -device back, front+physical, ...
+		id = ""
+		opts = append(opts, hwcamera.WithKind(k))
+	}
+	cam, err := hwcamera.Open(ctx, id, opts...)
 	if err != nil {
 		log.Fatal(err)
 	}

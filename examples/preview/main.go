@@ -2,6 +2,7 @@
 //
 //	go run ./preview
 //	go run ./preview -device <ID> -size 1920x1080 -fps 60
+//	go run ./preview -device front
 //
 // Keys:
 //
@@ -231,7 +232,10 @@ func (g *game) Draw(screen *ebiten.Image) {
 func (g *game) drawOverlay(screen *ebiten.Image) {
 	d := g.devices[g.index]
 	var b strings.Builder
-	fmt.Fprintf(&b, "[%d/%d] %s (%s", g.index+1, len(g.devices), d.Name, d.Backend)
+	fmt.Fprintf(&b, "[%d/%d] %s (%s, %s", g.index+1, len(g.devices), d.Name, d.Backend, d.Position)
+	if d.Lens != hwcamera.LensUnknown {
+		b.WriteString(", " + d.Lens.String())
+	}
 	if d.Virtual {
 		b.WriteString(", virtual")
 	}
@@ -272,7 +276,7 @@ func (g *game) maybeShoot(screen *ebiten.Image) {
 func (g *game) Layout(ow, oh int) (int, int) { return ow, oh }
 
 func main() {
-	device := flag.String("device", "", "camera ID (hwcamera list); empty for the default camera")
+	device := flag.String("device", "", "camera ID (hwcamera list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
 	size := flag.String("size", "1280x720", "capture size")
 	fps := flag.Float64("fps", 30, "capture frame rate")
 	quitAfter := flag.Duration("quit-after", 0, "quit after this long (for scripted checks)")
@@ -297,7 +301,19 @@ func main() {
 			start = i
 		}
 	}
-	if *device == "" {
+	if k, err := hwcamera.ParseKind(*device); err == nil {
+		// The first camera of that kind, in the order Open would try.
+		start = -1
+		for i, d := range devices {
+			if d.Is(k) {
+				start = i
+				break
+			}
+		}
+		if start < 0 {
+			log.Fatalf("no %s camera", k)
+		}
+	} else if *device == "" {
 		// Devices puts the default and physical cameras first; skip
 		// leading virtual ones like Open("") does.
 		for i, d := range devices {

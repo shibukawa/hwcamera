@@ -62,6 +62,7 @@ func describe(mgr uintptr, id string) (characteristics, error) {
 	return characteristics{
 		info: camera.DeviceInfo{
 			ID: id, Name: deviceName(id, pos), Backend: Name, Position: pos,
+			Lens:  lensFor(entryF32(meta, tagLensInfoFocalLengths), entryF32(meta, tagSensorInfoPhysicalSize)),
 			Modes: buildModes(entryI32(meta, tagScalerStreamConfigurations), entryI64(meta, tagScalerMinFrameDurations), ranges),
 		},
 		ranges: fpsRanges(ranges),

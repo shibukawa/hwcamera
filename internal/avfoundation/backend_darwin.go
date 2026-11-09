@@ -154,12 +154,31 @@ func kindOf(d objc.ID) deviceKind {
 	return kindUnknown
 }
 
+// lensOf maps the built-in device types to the lens; external cameras
+// do not say.
+func lensOf(d objc.ID) camera.Lens {
+	if !responds(d, selDeviceType) {
+		return camera.LensUnknown
+	}
+	t := d.Send(selDeviceType)
+	switch {
+	case equalStrings(t, avDeviceTypeBuiltInWideAngle):
+		return camera.LensWide
+	case equalStrings(t, avDeviceTypeBuiltInUltraWide):
+		return camera.LensUltraWide
+	case equalStrings(t, avDeviceTypeBuiltInTelephoto):
+		return camera.LensTelephoto
+	}
+	return camera.LensUnknown
+}
+
 func describe(d objc.ID) camera.DeviceInfo {
 	info := camera.DeviceInfo{
 		ID:       goString(d.Send(selUniqueID)),
 		Name:     goString(d.Send(selLocalizedName)),
 		Backend:  Name,
 		Position: positionFor(int(d.Send(selPosition)), kindOf(d)),
+		Lens:     lensOf(d),
 		Virtual:  isVirtual(d),
 	}
 	var modes []camera.Mode

@@ -38,6 +38,8 @@ import (
 type (
 	PixelFormat  = camera.PixelFormat
 	Position     = camera.Position
+	Lens         = camera.Lens
+	Kind         = camera.Kind
 	Mode         = camera.Mode
 	DeviceInfo   = camera.DeviceInfo
 	Frame        = camera.Frame
@@ -58,7 +60,29 @@ const (
 	PositionFront    = camera.PositionFront
 	PositionBack     = camera.PositionBack
 	PositionExternal = camera.PositionExternal
+
+	LensUnknown   = camera.LensUnknown
+	LensWide      = camera.LensWide
+	LensUltraWide = camera.LensUltraWide
+	LensTelephoto = camera.LensTelephoto
 )
+
+// Camera traits for WithKind, combined with |: WithKind(Back|UltraWide)
+// opens the back ultra-wide camera.
+const (
+	Front     = camera.KindFront     // facing the user (Position)
+	Back      = camera.KindBack      // facing away from the user (Position)
+	External  = camera.KindExternal  // plugged in: USB, Continuity Camera (Position)
+	Wide      = camera.KindWide      // the main lens (Lens)
+	UltraWide = camera.KindUltraWide // the 0.5x lens (Lens)
+	Telephoto = camera.KindTelephoto // a 2x or longer lens (Lens)
+	Physical  = camera.KindPhysical  // a real camera (not Virtual)
+	Virtual   = camera.KindVirtual   // a software camera (Virtual)
+)
+
+// ParseKind parses traits such as "back", "back+ultrawide" or
+// "front,physical", for command-line flags.
+func ParseKind(s string) (Kind, error) { return camera.ParseKind(s) }
 
 var (
 	ErrNoDevice    = camera.ErrNoDevice
@@ -143,6 +167,16 @@ func WithFormat(f PixelFormat) Option { return func(c *camera.Config) { c.Format
 // resolutions or rates that a USB 2 camera offers only as MJPEG.
 func WithNativeFormat(f PixelFormat) Option { return func(c *camera.Config) { c.Native = f } }
 
+// WithKind makes Open pick only a camera that has every trait of k, for
+// example WithKind(Front) or WithKind(Back|Telephoto). Open returns an
+// error wrapping ErrNotFound when no camera matches; it never falls back
+// to another kind. With an ID, the camera must match too.
+//
+// Front and Back are known on phones, Macs, Windows (from the panel
+// location or the USB port) and Linux (from the USB port); the lens only
+// on iOS, Android and Mac built-in cameras.
+func WithKind(k Kind) Option { return func(c *camera.Config) { c.Kind = k } }
+
 // WithBuffers sets the number of frames the driver may hold in flight (V4L2;
 // default 4). Frames not released block the driver once all are out.
 func WithBuffers(n int) Option { return func(c *camera.Config) { c.Buffers = n } }
@@ -162,6 +196,7 @@ type Camera struct {
 // id it picks one in the order of Devices: the system's default camera,
 // built-in cameras, other physical cameras, and a virtual camera only when
 // there is no physical one. A camera that fails to open is skipped.
+// WithKind narrows the choice.
 func Open(ctx context.Context, id string, opts ...Option) (*Camera, error) {
 	cfg := camera.Config{Format: NV12}
 	for _, o := range opts {
@@ -177,6 +212,7 @@ func Open(ctx context.Context, id string, opts ...Option) (*Camera, error) {
 	}
 	var cands []cand
 	var errs []error
+	found := false // a device with the ID exists (whatever its kind)
 	for _, b := range bs {
 		ds, err := b.Devices(ctx)
 		if err != nil {
@@ -184,7 +220,11 @@ func Open(ctx context.Context, id string, opts ...Option) (*Camera, error) {
 			continue
 		}
 		for _, d := range ds {
-			if id == "" || d.ID == id {
+			if id != "" && d.ID != id {
+				continue
+			}
+			found = true
+			if d.Is(cfg.Kind) {
 				cands = append(cands, cand{b, d})
 			}
 		}
@@ -232,8 +272,13 @@ func Open(ctx context.Context, id string, opts ...Option) (*Camera, error) {
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
-	if id != "" {
+	switch {
+	case id != "" && found:
+		return nil, fmt.Errorf("%w: %s is not a %s camera", ErrNotFound, id, cfg.Kind)
+	case id != "":
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	case found && cfg.Kind != 0:
+		return nil, fmt.Errorf("%w: no %s camera", ErrNotFound, cfg.Kind)
 	}
 	return nil, ErrNoDevice
 }

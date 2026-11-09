@@ -102,3 +102,21 @@ func TestDefaultAndErrors(t *testing.T) {
 		t.Fatal("error mapping")
 	}
 }
+
+func TestLensFor(t *testing.T) {
+	for _, c := range []struct {
+		focal, size []float32
+		want        camera.Lens
+	}{
+		{[]float32{6.81}, []float32{9.8, 7.4}, camera.LensWide},      // Pixel 8 Pro main, 24 mm eq
+		{[]float32{2.23}, []float32{6.4, 4.8}, camera.LensUltraWide}, // 12 mm eq
+		{[]float32{18.0}, []float32{5.6, 4.2}, camera.LensTelephoto}, // 5x, 111 mm eq
+		{[]float32{2.74}, []float32{4.6, 3.4}, camera.LensWide},      // a selfie camera, 21 mm eq
+		{nil, []float32{4.6, 3.4}, camera.LensUnknown},
+		{[]float32{4}, nil, camera.LensUnknown},
+	} {
+		if got := lensFor(c.focal, c.size); got != c.want {
+			t.Errorf("%v %v: %s, want %s", c.focal, c.size, got, c.want)
+		}
+	}
+}

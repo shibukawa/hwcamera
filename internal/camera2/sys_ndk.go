@@ -215,6 +215,14 @@ func entryI64(meta uintptr, tag uint32) []int64 {
 	return append([]int64(nil), unsafe.Slice((*int64)(e.Data), e.Count)...)
 }
 
+func entryF32(meta uintptr, tag uint32) []float32 {
+	e, ok := entry(meta, tag)
+	if !ok || e.Type != typeFloat || e.Count == 0 {
+		return nil
+	}
+	return append([]float32(nil), unsafe.Slice((*float32)(e.Data), e.Count)...)
+}
+
 func entryU8(meta uintptr, tag uint32) (uint8, bool) {
 	e, ok := entry(meta, tag)
 	if !ok || e.Type != typeByte || e.Count == 0 {

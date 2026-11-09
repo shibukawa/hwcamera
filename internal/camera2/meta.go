@@ -28,6 +28,7 @@ package camera2
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"unsafe"
 
@@ -39,19 +40,23 @@ const Name = "camera2"
 
 // Metadata tags (camera/NdkCameraMetadataTags.h): section << 16 | index.
 const (
-	sectionControl = 1
-	sectionLens    = 8
-	sectionScaler  = 13
-	sectionSensor  = 14
-	sectionInfo    = 21
+	sectionControl    = 1
+	sectionLens       = 8
+	sectionLensInfo   = 9
+	sectionScaler     = 13
+	sectionSensor     = 14
+	sectionSensorInfo = 15
+	sectionInfo       = 21
 
-	tagControlAETargetFPSRange          = sectionControl<<16 | 5  // ACAMERA_CONTROL_AE_TARGET_FPS_RANGE
-	tagControlAEAvailableTargetFPSRange = sectionControl<<16 | 20 // ACAMERA_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES
-	tagLensFacing                       = sectionLens<<16 | 5     // ACAMERA_LENS_FACING
-	tagScalerStreamConfigurations       = sectionScaler<<16 | 10  // ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS
-	tagScalerMinFrameDurations          = sectionScaler<<16 | 11  // ACAMERA_SCALER_AVAILABLE_MIN_FRAME_DURATIONS
-	tagSensorOrientation                = sectionSensor<<16 | 14  // ACAMERA_SENSOR_ORIENTATION
-	tagInfoSupportedHardwareLevel       = sectionInfo<<16 | 0     // ACAMERA_INFO_SUPPORTED_HARDWARE_LEVEL
+	tagControlAETargetFPSRange          = sectionControl<<16 | 5    // ACAMERA_CONTROL_AE_TARGET_FPS_RANGE
+	tagControlAEAvailableTargetFPSRange = sectionControl<<16 | 20   // ACAMERA_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES
+	tagLensFacing                       = sectionLens<<16 | 5       // ACAMERA_LENS_FACING
+	tagLensInfoFocalLengths             = sectionLensInfo<<16 | 2   // ACAMERA_LENS_INFO_AVAILABLE_FOCAL_LENGTHS
+	tagSensorInfoPhysicalSize           = sectionSensorInfo<<16 | 5 // ACAMERA_SENSOR_INFO_PHYSICAL_SIZE
+	tagScalerStreamConfigurations       = sectionScaler<<16 | 10    // ACAMERA_SCALER_AVAILABLE_STREAM_CONFIGURATIONS
+	tagScalerMinFrameDurations          = sectionScaler<<16 | 11    // ACAMERA_SCALER_AVAILABLE_MIN_FRAME_DURATIONS
+	tagSensorOrientation                = sectionSensor<<16 | 14    // ACAMERA_SENSOR_ORIENTATION
+	tagInfoSupportedHardwareLevel       = sectionInfo<<16 | 0       // ACAMERA_INFO_SUPPORTED_HARDWARE_LEVEL
 )
 
 // ACAMERA_LENS_FACING values.
@@ -350,6 +355,27 @@ func position(facing int32, ok bool) camera.Position {
 		return camera.PositionExternal
 	}
 	return camera.PositionUnknown
+}
+
+// lensFor classifies a camera by its 35 mm equivalent focal length,
+// computed from the first available focal length and the sensor's
+// physical size (both in mm): under 20 mm is ultra-wide (0.5x lenses are
+// 13-16 mm), 40 mm and over telephoto (2x is about 48 mm), wide between
+// (main cameras are 23-28 mm). A logical multi-camera reports its main
+// lens, so it counts as wide.
+func lensFor(focal, size []float32) camera.Lens {
+	if len(focal) == 0 || len(size) < 2 || focal[0] <= 0 || size[0] <= 0 || size[1] <= 0 {
+		return camera.LensUnknown
+	}
+	diag := math.Hypot(float64(size[0]), float64(size[1]))
+	eq := float64(focal[0]) * 43.27 / diag
+	switch {
+	case eq < 20:
+		return camera.LensUltraWide
+	case eq >= 40:
+		return camera.LensTelephoto
+	}
+	return camera.LensWide
 }
 
 // deviceName is the name shown for a camera: Android has no human-readable

@@ -31,7 +31,7 @@ import (
 func main() {
 	model := flag.String("model", "", "model: .mlpackage / .mlmodelc (Core ML) or .xml (OpenVINO IR)")
 	labelsPath := flag.String("labels", "", "text file with one class name per line")
-	device := flag.String("device", "", "camera ID; empty for the first camera")
+	device := flag.String("device", "", "camera ID (hwcamera list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
 	norm := flag.String("norm", "imagenet", "input normalisation: imagenet, unit (0..1), symmetric (-1..1), raw (0..255)")
 	bgr := flag.Bool("bgr", false, "the model takes BGR")
 	top := flag.Int("top", 3, "scores to print per frame")
@@ -135,7 +135,12 @@ func main() {
 	}
 
 	// RGBA from the camera saves a YUV conversion inside tensor.Fill.
-	cam, err := hwcamera.Open(ctx, *device, hwcamera.WithSize(640, 480), hwcamera.WithFormat(hwcamera.RGBA))
+	id, opts := *device, []hwcamera.Option{hwcamera.WithSize(640, 480), hwcamera.WithFormat(hwcamera.RGBA)}
+	if k, err := hwcamera.ParseKind(id); err == nil { // -device back, front+physical, ...
+		id = ""
+		opts = append(opts, hwcamera.WithKind(k))
+	}
+	cam, err := hwcamera.Open(ctx, id, opts...)
 	if err != nil {
 		log.Fatal(err)
 	}
