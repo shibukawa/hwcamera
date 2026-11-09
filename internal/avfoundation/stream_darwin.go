@@ -53,6 +53,9 @@ func registerDelegate() error {
 			{Cmd: selDidDrop, Fn: didDropSampleBuffer},
 			{Cmd: selRuntimeError, Fn: sessionRuntimeError},
 			{Cmd: selDisconnected, Fn: deviceDisconnected},
+			{Cmd: selInterrupted, Fn: sessionInterrupted},
+			{Cmd: selInterruptionEnded, Fn: sessionInterruptionEnded},
+			{Cmd: selBecameActive, Fn: applicationDidBecomeActive},
 		})
 		noopFn = purego.NewCallback(func(uintptr) {})
 	})
@@ -93,7 +96,78 @@ func sessionRuntimeError(self objc.ID, _ objc.SEL, note objc.ID) {
 			nserr = ui.Send(selObjectForKey, avSessionErrorKey)
 		}
 	}
-	s.fail(nativeErr("session runtime error", nserr))
+	code, _ := nsError(nserr)
+	switch code {
+	case avErrorMediaServicesWereReset:
+		// The media server died and came back (iOS): the session stopped
+		// but can be started again, as Apple's AVCam sample does.
+		// The NSError is only valid during this call: convert it now.
+		go s.restart(nativeErr("session runtime error", nserr))
+	case avErrorDeviceIsNotAvailableInBackground:
+		// Started or running while the app was in the background (iOS):
+		// restarted when the app becomes active again.
+	default:
+		s.fail(nativeErr("session runtime error", nserr))
+	}
+}
+
+// sessionInterrupted observes AVCaptureSessionWasInterruptedNotification
+// (iOS: the app went to the background, another app or a phone call took
+// the camera, Split View, system pressure). Frames simply stop: Read keeps
+// blocking until they resume.
+func sessionInterrupted(self objc.ID, _ objc.SEL, _ objc.ID) {}
+
+// sessionInterruptionEnded observes
+// AVCaptureSessionInterruptionEndedNotification. AVFoundation resumes the
+// session by itself; restart covers a session that stopped meanwhile.
+func sessionInterruptionEnded(self objc.ID, _ objc.SEL, _ objc.ID) {
+	if s := streamOf(self); s != nil {
+		go s.restart(nil)
+	}
+}
+
+// applicationDidBecomeActive observes
+// UIApplicationDidBecomeActiveNotification (iOS only): an interruption is
+// not guaranteed to end with a notification, and a session stopped by a
+// background runtime error does not resume by itself.
+func applicationDidBecomeActive(self objc.ID, _ objc.SEL, _ objc.ID) {
+	if s := streamOf(self); s != nil {
+		go s.restart(nil)
+	}
+}
+
+// restart starts the session again if it is neither running nor
+// interrupted. When it does not start, failure (if not nil) ends the
+// stream; otherwise the stream keeps waiting for the next interruption end
+// or app activation.
+func (s *stream) restart(failure error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.started.Load() || s.session == 0 {
+		return
+	}
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+	ok := true
+	withPool(func() {
+		if objc.Send[bool](s.session, selIsRunning) || s.isInterrupted() {
+			return
+		}
+		s.session.Send(selStartRunning)
+		ok = objc.Send[bool](s.session, selIsRunning) || s.isInterrupted()
+	})
+	if !ok && failure != nil {
+		s.fail(failure)
+	}
+}
+
+// isInterrupted reports -[AVCaptureSession isInterrupted] (iOS 4,
+// macOS 10.14; false where it does not exist).
+func (s *stream) isInterrupted() bool {
+	return responds(s.session, selIsInterrupted) && objc.Send[bool](s.session, selIsInterrupted)
 }
 
 func deviceDisconnected(self objc.ID, _ objc.SEL, _ objc.ID) {
@@ -104,6 +178,12 @@ func deviceDisconnected(self objc.ID, _ objc.SEL, _ objc.ID) {
 
 type stream struct {
 	mode camera.Mode
+
+	// mu serialises restart against teardown.
+	mu sync.Mutex
+	// started is set once openStream succeeded; restart does nothing
+	// before.
+	started atomic.Bool
 
 	session, device, input, output, delegate objc.ID
 	queue                                    uintptr
@@ -159,7 +239,9 @@ func (s *stream) fail(err error) {
 func (s *stream) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.done)
+		s.mu.Lock()
 		withPool(s.teardown)
+		s.mu.Unlock()
 	})
 	return nil
 }
@@ -349,7 +431,9 @@ func openStream(id string, cfg camera.Config) (s *stream, err error) {
 	}
 	defer func() {
 		if err != nil {
+			s.mu.Lock()
 			s.teardown()
+			s.mu.Unlock()
 			s = nil
 		}
 	}()
@@ -385,6 +469,15 @@ func openStream(id string, cfg camera.Config) (s *stream, err error) {
 	}
 	if avDeviceWasDisconnectedNotification != 0 {
 		center.Send(selAddObserver, s.delegate, selDisconnected, avDeviceWasDisconnectedNotification, dev)
+	}
+	if avSessionWasInterruptedNotification != 0 {
+		center.Send(selAddObserver, s.delegate, selInterrupted, avSessionWasInterruptedNotification, s.session)
+	}
+	if avSessionInterruptionEndedNote != 0 {
+		center.Send(selAddObserver, s.delegate, selInterruptionEnded, avSessionInterruptionEndedNote, s.session)
+	}
+	if uiAppDidBecomeActiveNotification != 0 {
+		center.Send(selAddObserver, s.delegate, selBecameActive, uiAppDidBecomeActiveNotification, objc.ID(0))
 	}
 
 	// The session picks a format from its preset when it starts, which
@@ -425,8 +518,12 @@ func openStream(id string, cfg camera.Config) (s *stream, err error) {
 	s.session.Send(selStartRunning)
 	dev.Send(selUnlockForConfiguration)
 	s.locked = false
-	if !objc.Send[bool](s.session, selIsRunning) {
+	// A session that starts interrupted (iOS: the app is in the background
+	// or another app holds the camera) is not an error: frames come once
+	// the interruption ends.
+	if !objc.Send[bool](s.session, selIsRunning) && !s.isInterrupted() {
 		return s, &camera.BackendError{Backend: Name, Op: "startRunning", Err: errors.New("session did not start")}
 	}
+	s.started.Store(true)
 	return s, nil
 }

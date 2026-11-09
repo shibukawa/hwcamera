@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64 || riscv64 || loong64 || ppc64le || s390x)
+//go:build linux && !android && (amd64 || arm64 || riscv64 || loong64 || ppc64le || s390x)
 
 package audio
 

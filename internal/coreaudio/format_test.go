@@ -150,3 +150,13 @@ func TestSampleGap(t *testing.T) {
 		t.Error("restart not flagged")
 	}
 }
+
+func TestRecordPermissionFourCC(t *testing.T) {
+	for want, got := range map[string]uint32{
+		"undt": recordPermissionUndetermined, "deny": recordPermissionDenied, "grnt": recordPermissionGranted,
+	} {
+		if fourCC(want) != got {
+			t.Errorf("%s = %#x, want %#x", want, got, fourCC(want))
+		}
+	}
+}

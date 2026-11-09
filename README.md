@@ -10,9 +10,14 @@ camera API.
 | Linux (64-bit) | V4L2 | `ioctl` and `mmap` on `/dev/videoN` through `golang.org/x/sys/unix`; no library at all |
 | macOS | AVFoundation | the Objective-C runtime through [purego](https://github.com/ebitengine/purego) (`AVCaptureSession`, a runtime-registered sample buffer delegate) |
 | Windows x64 / ARM64 | Media Foundation | `IMFSourceReader` through raw COM vtable calls and `golang.org/x/sys/windows` |
+| iOS / iPadOS | AVFoundation | the macOS backend with the iOS device types and session interruptions |
+| Android 8.0+ | Camera2 NDK | `libcamera2ndk.so` and `AImageReader` (`libmediandk.so`) through purego |
 
-`CGO_ENABLED=0 go build` works everywhere and the module cross-compiles from
-one machine, like its siblings
+`CGO_ENABLED=0 go build` works on the desktop systems and the module
+cross-compiles from one machine. On iOS and Android purego needs the cgo
+runtime, so mobile builds set `CGO_ENABLED=1` with the platform's clang
+(which `ebitenmobile bind` does by itself) while the library still contains
+no cgo code, like its siblings
 [hwmediacodec](https://github.com/shibukawa/hwmediacodec) (hardware video
 codecs) and [hwnpu](https://github.com/shibukawa/hwnpu) (NPUs). hwcamera is
 the front of that chain: frames come out as NV12, the input format of every
@@ -27,8 +32,8 @@ an NPU.
 | `.../audio` | Microphone capture: `Devices`, `Open`, `Mic.Read` returning PCM (S16 or F32, any rate and channel count; the OS converts) |
 | `.../tensor` | Frame → input tensor: stretch / letterbox / centre crop, RGB / BGR / gray, NCHW / NHWC, float32 / float16 / uint8 / int8, mean and std; maps model coordinates back to the frame |
 | `.../mediacodec` | Separate module: the camera as a `hwmediacodec.FrameReader`, an encoder sized for the camera, `Record` (camera → encoder → any `PacketWriter`: MP4, HLS, WebRTC) |
-| `.../examples` | Separate module: `preview` (camera in an Ebitengine window), `record` (MP4), `hls` (live stream to browsers), `npu` (image model on the NPU over camera frames) |
-| `.../cmd/hwcamera` | `list`, `snap`, `check` |
+| `.../examples` | Separate module: `preview` (camera in an Ebitengine window), `mobile` (the camera and microphone sample as an iOS and Android app, see [examples/mobile](examples/mobile/README.md)), `record` (MP4), `hls` (live stream to browsers), `npu` (image model on the NPU over camera frames) |
+| `.../cmd/hwcamera` | `list`, `snap`, `check`, `mics`, `rec` |
 
 The core module depends only on purego and `golang.org/x/sys`.
 
@@ -39,6 +44,8 @@ The core module depends only on purego and `golang.org/x/sys`.
 | Linux, V4L2 | Verified with the kernel's `vivid` virtual camera on Linux 7.0 (amd64): enumeration, NV12 / I420 / YUYV / UYVY / RGB capture at 25 fps without drops up to 3840x2160, conversion of every format to the same colours, camera → VA-API H.264 / HEVC (Radeon 880M) → MP4 and live HLS. Structure layouts and ioctl numbers checked against the kernel headers. **Not yet verified with a real USB camera (MJPEG).** |
 | macOS, AVFoundation | Builds (`CGO_ENABLED=0`, arm64 and amd64). **Not yet run on a Mac.** |
 | Windows, Media Foundation | Builds (`CGO_ENABLED=0`, amd64 and arm64). **Not yet run on Windows.** |
+| iOS, AVFoundation | Type-checked (`scripts/typecheck-mobile.sh`). **Not yet run on a device.** |
+| Android, Camera2 NDK | Builds for `GOOS=android` and type-checks for arm64 and arm. **Not yet run on a device.** |
 
 Please run the check on your machine and report the output in an issue:
 
@@ -105,6 +112,8 @@ for {
 | Linux | PulseAudio client library (`libpulse`, purego); works with PulseAudio and PipeWire | Verified on Linux 7.0 with pipewire-pulse: a 1 kHz tone played into a virtual sink comes back from its monitor within 1 LSB of the input, also resampled to 16 kHz stereo; no drops |
 | macOS | Core Audio HAL (devices) and AudioQueue (capture), purego | Builds; **not yet run on a Mac** |
 | Windows | WASAPI shared mode with automatic format conversion, COM vtables | Builds; **not yet run on Windows** |
+| iOS | AVAudioSession (devices, route, permission, interruptions) and AudioQueue | Type-checked; **not yet run on a device** |
+| Android 8.0+ | AAudio (`libaaudio.so`), shared mode; Go converts rate, channels and format where the device does not | Builds; **not yet run on a device** |
 
 - The OS audio stack resamples and mixes channels, so buffers always have the
   format asked for.
@@ -190,6 +199,35 @@ a model; that saves one conversion. See `examples/npu`.
   `Open` lists the devices first, so opening one camera wakes every camera
   for a moment.
 
+### iOS
+
+- `Info.plist` needs `NSCameraUsageDescription` and
+  `NSMicrophoneUsageDescription`; without them iOS ends the app at the first
+  access. The library asks for the permissions itself.
+- Frames come in the sensor's orientation (landscape) and are not
+  rotated or mirrored; a portrait app rotates when drawing.
+- The physical cameras are listed (wide, ultra wide, telephoto, front;
+  USB cameras on iPadOS 17+), not the multi-camera devices built from them.
+- While the app is in the background or another app holds the camera,
+  `Read` waits and the frames resume afterwards. The microphone resumes after
+  a call or Siri, and the next buffer has `Discontinuity` set.
+- `audio.Open` switches the audio session to PlayAndRecord unless the app
+  already chose PlayAndRecord or Record, and activates it.
+
+### Android
+
+- The app needs `android.permission.CAMERA` and
+  `android.permission.RECORD_AUDIO` in its manifest and must request them at
+  run time from Java or Kotlin; Go cannot. `Open` returns `ErrPermission`
+  for the camera until then (the microphone's error names `RECORD_AUDIO`).
+- Frames come in the sensor's orientation and are delivered as NV12
+  (YUV_420_888 from `AImageReader`, repacked in Go).
+- The NDK gives cameras no names ("Back camera 0"), and AAudio has no
+  device list: `audio.Devices` has one "Default input"; a numeric
+  `AudioDeviceInfo` ID from Java opens a specific input.
+- See [examples/mobile](examples/mobile/README.md) for an app that does all
+  of this.
+
 ## Known limitations
 
 - Colour: YUV frames are treated as BT.601 video range (what UVC cameras
@@ -200,7 +238,7 @@ a model; that saves one conversion. See `examples/npu`.
   hwmediacodec would fix it.
 - No camera controls yet (exposure, focus, white balance, zoom).
 - No still-image capture at sensor resolution, no depth or IR streams.
-- iOS, Android and browsers (`getUserMedia`) have no backend yet.
+- Browsers (`getUserMedia`) have no backend yet.
 
 ## License
 

@@ -1,6 +1,7 @@
 package avfoundation
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/shibukawa/hwcamera/internal/camera"
@@ -144,5 +145,30 @@ func TestPositionFor(t *testing.T) {
 func TestTransportVirtual(t *testing.T) {
 	if transportVirtual != 0x76697274 {
 		t.Fatalf("transportVirtual = %#x", transportVirtual)
+	}
+}
+
+func TestIOSDeviceOrder(t *testing.T) {
+	type cam struct {
+		name string
+		t    iosType
+		pos  int
+	}
+	in := []cam{
+		{"external", iosTypeExternal, 0},
+		{"tele", iosTypeTelephoto, avPosBack},
+		{"front wide", iosTypeWide, avPosFront},
+		{"ultra wide", iosTypeUltraWide, avPosBack},
+		{"back wide", iosTypeWide, avPosBack},
+		{"front ultra wide", iosTypeUltraWide, avPosFront},
+	}
+	sort.SliceStable(in, func(i, j int) bool {
+		return iosDeviceOrder(in[i].t, in[i].pos) < iosDeviceOrder(in[j].t, in[j].pos)
+	})
+	want := []string{"back wide", "front wide", "ultra wide", "front ultra wide", "tele", "external"}
+	for i, c := range in {
+		if c.name != want[i] {
+			t.Fatalf("order[%d] = %s, want %s (all: %v)", i, c.name, want[i], in)
+		}
 	}
 }

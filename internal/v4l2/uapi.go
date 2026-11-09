@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64 || riscv64 || loong64 || ppc64le || ppc64 || s390x || mips64 || mips64le)
+//go:build linux && !android && (amd64 || arm64 || riscv64 || loong64 || ppc64le || ppc64 || s390x || mips64 || mips64le)
 
 // Package v4l2 is the Linux backend: the Video4Linux2 capture API driven
 // through ioctl and mmap on /dev/videoN, with no library in between.

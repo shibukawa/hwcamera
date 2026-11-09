@@ -22,6 +22,31 @@ const Name = "avfoundation"
 // the permission is the one of the terminal application it runs in
 // (Terminal, iTerm, the IDE), which macOS asks for on first use and which
 // System Settings > Privacy & Security > Camera can grant later.
+//
+// iOS and iPadOS use the same backend (GOOS=ios also satisfies the darwin
+// build tag; purego needs CGO_ENABLED=1 there, as gomobile and ebitenmobile
+// set). The app's Info.plist MUST carry NSCameraUsageDescription: without
+// it iOS kills the process the moment the camera is requested. On iOS:
+//
+//   - Devices lists the physical cameras only: the wide-angle, ultra-wide
+//     and telephoto cameras (back and front) and, on iPadOS 17 and later,
+//     external USB cameras. The virtual multi-camera devices (dual, dual
+//     wide, triple, TrueDepth) are left out because their video is that
+//     of a physical camera already listed. Order: back wide, front wide,
+//     ultra-wide, telephoto, external; Default marks the system preferred
+//     camera, else +defaultDeviceWithMediaType: (the back wide camera).
+//   - Frames come in the sensor's native landscape orientation (for the
+//     back camera the image is upright with the device held in landscape,
+//     home button / USB port on the right). The library neither rotates
+//     nor mirrors the connection, so a frame's size is always the Mode's
+//     (a rotation would swap it and cost a copy in the capture pipeline).
+//     Rotate in the renderer for a portrait UI.
+//   - While the capture session is interrupted (the app went to the
+//     background, another app took the camera, Split View, system
+//     pressure) Read keeps blocking and frames resume when the
+//     interruption ends or the app becomes active again. Media services
+//     being reset restarts the session; other runtime errors end the
+//     stream with an error.
 type Backend struct{}
 
 func (Backend) Name() string { return Name }
@@ -39,68 +64,64 @@ func (Backend) Devices(ctx context.Context) ([]camera.DeviceInfo, error) {
 	var out []camera.DeviceInfo
 	withPool(func() {
 		def := preferredID()
+		listed := false
 		for _, d := range discover() {
 			info := describe(d)
 			info.Default = info.ID == def
+			listed = listed || info.Default
 			out = append(out, info)
+		}
+		if !listed {
+			// The preferred camera is one Devices does not list (on iOS a
+			// virtual multi-camera device such as the triple camera):
+			// mark +defaultDeviceWithMediaType: instead.
+			if def = defaultID(); def != "" {
+				for i := range out {
+					out[i].Default = out[i].ID == def
+				}
+			}
 		}
 	})
 	return out, nil
 }
 
-// preferredID returns the unique ID of the camera macOS prefers:
-// +systemPreferredCamera (macOS 13; the camera picked in Control Center or
-// the one last used), else +defaultDeviceWithMediaType:.
+// preferredID returns the unique ID of the camera the system prefers:
+// +systemPreferredCamera (macOS 13 / iOS 17; on macOS the camera picked in
+// Control Center or the one last used, on iOS the app's
+// userPreferredCamera when set), else +defaultDeviceWithMediaType:.
 func preferredID() string {
 	c := class("AVCaptureDevice")
-	var d objc.ID
 	if responds(c, selSystemPreferredCamera) {
-		d = c.Send(selSystemPreferredCamera)
+		if d := c.Send(selSystemPreferredCamera); d != 0 {
+			return goString(d.Send(selUniqueID))
+		}
 	}
-	if d == 0 {
-		d = c.Send(selDefaultDevice, avMediaTypeVideo)
-	}
+	return defaultID()
+}
+
+// defaultID returns the unique ID of +defaultDeviceWithMediaType: (on
+// iOS the back wide-angle camera).
+func defaultID() string {
+	d := class("AVCaptureDevice").Send(selDefaultDevice, avMediaTypeVideo)
 	if d == 0 {
 		return ""
 	}
 	return goString(d.Send(selUniqueID))
 }
 
-// isVirtual reports a software camera: -transportType (an
-// IOAudioDeviceTransportType FourCC) is 'virt' for camera extensions and
-// DAL plug-ins that are not hardware (OBS, VR and conferencing drivers).
-func isVirtual(d objc.ID) bool {
-	if !responds(d, selTransportType) {
-		return false
-	}
-	return uint32(objc.Send[int32](d, selTransportType)) == transportVirtual
-}
-
-// discover lists the video capture devices. The discovery session is the
-// supported API since macOS 10.15; +devicesWithMediaType: covers older
-// systems.
+// discover lists the video capture devices in the platform's preferred
+// order. The discovery session is the supported API since macOS 10.15 and
+// iOS 10; +devicesWithMediaType: covers older systems.
 func discover() []objc.ID {
 	if ds := class("AVCaptureDeviceDiscoverySession"); ds != 0 {
-		var types []objc.ID
-		if avDeviceTypeBuiltInWideAngle != 0 {
-			types = append(types, avDeviceTypeBuiltInWideAngle)
-		}
-		if avDeviceTypeExternal != 0 {
-			types = append(types, avDeviceTypeExternal)
-		} else if avDeviceTypeExternalUnknown != 0 {
-			types = append(types, avDeviceTypeExternalUnknown)
-		}
-		if avDeviceTypeContinuity != 0 && continuityAllowed() {
-			types = append(types, avDeviceTypeContinuity)
-		}
-		if len(types) > 0 {
+		if types := discoveryTypes(); len(types) > 0 {
 			sess := ds.Send(selDiscoverySession, nsArray(types), avMediaTypeVideo, uintptr(avPositionUnspecified))
 			if sess != 0 {
-				return dedupe(items(sess.Send(selDevices)))
+				return orderDevices(dedupe(items(sess.Send(selDevices))))
 			}
 		}
 	}
-	return dedupe(items(class("AVCaptureDevice").Send(selDevicesWithMediaType, avMediaTypeVideo)))
+	return orderDevices(dedupe(items(class("AVCaptureDevice").Send(selDevicesWithMediaType, avMediaTypeVideo))))
 }
 
 func dedupe(ds []objc.ID) []objc.ID {
@@ -117,27 +138,14 @@ func dedupe(ds []objc.ID) []objc.ID {
 	return out
 }
 
-// continuityAllowed reports whether the main bundle opts into Continuity
-// Camera. macOS 14 only lets apps that set
-// NSCameraUseContinuityCameraDeviceType in Info.plist use that device type,
-// and asking for it without the key is not something to risk an
-// Objective-C exception on.
-func continuityAllowed() bool {
-	b := class("NSBundle").Send(selMainBundle)
-	if b == 0 {
-		return false
-	}
-	v := b.Send(selObjectForInfoDictionaryKey, nsString("NSCameraUseContinuityCameraDeviceType"))
-	return v != 0 && responds(v, selBoolValue) && objc.Send[bool](v, selBoolValue)
-}
-
 func kindOf(d objc.ID) deviceKind {
 	if !responds(d, selDeviceType) {
 		return kindUnknown
 	}
 	t := d.Send(selDeviceType)
 	switch {
-	case equalStrings(t, avDeviceTypeBuiltInWideAngle):
+	case equalStrings(t, avDeviceTypeBuiltInWideAngle), equalStrings(t, avDeviceTypeBuiltInUltraWide),
+		equalStrings(t, avDeviceTypeBuiltInTelephoto):
 		return kindBuiltIn
 	case equalStrings(t, avDeviceTypeExternal), equalStrings(t, avDeviceTypeExternalUnknown),
 		equalStrings(t, avDeviceTypeContinuity):
@@ -289,6 +297,10 @@ const (
 	avErrorDeviceAlreadyUsedByAnotherSession  = -11804
 	avErrorDeviceNotConnected                 = -11814
 	avErrorApplicationIsNotAuthorizedToUseDev = -11852
+
+	// Not mapped to sentinels; the session is restarted instead.
+	avErrorMediaServicesWereReset           = -11819
+	avErrorDeviceIsNotAvailableInBackground = -11837
 )
 
 func nativeErr(op string, nserr objc.ID) error {

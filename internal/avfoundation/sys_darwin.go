@@ -75,13 +75,21 @@ var (
 	avMediaTypeVideo                 objc.ID
 	avSessionPresetInputPriority     objc.ID
 	avDeviceTypeBuiltInWideAngle     objc.ID
-	avDeviceTypeExternal             objc.ID // macOS 14
-	avDeviceTypeExternalUnknown      objc.ID // macOS 10.15, deprecated in 14
+	avDeviceTypeBuiltInUltraWide     objc.ID // iOS 13
+	avDeviceTypeBuiltInTelephoto     objc.ID // iOS 10
+	avDeviceTypeExternal             objc.ID // macOS 14, iPadOS 17
+	avDeviceTypeExternalUnknown      objc.ID // macOS 10.15, deprecated in 14; not on iOS
 	avDeviceTypeContinuity           objc.ID // macOS 14
 
 	avSessionRuntimeErrorNotification   objc.ID
 	avSessionErrorKey                   objc.ID
 	avDeviceWasDisconnectedNotification objc.ID
+	avSessionWasInterruptedNotification objc.ID // iOS 4, macOS 10.14
+	avSessionInterruptionEndedNote      objc.ID // iOS 4, macOS 10.14
+
+	// UIApplicationDidBecomeActiveNotification (UIKit, iOS only; 0 on
+	// macOS): the app is back in the foreground.
+	uiAppDidBecomeActiveNotification objc.ID
 )
 
 var (
@@ -180,12 +188,17 @@ func doLoad() error {
 	av.obj(&avMediaTypeVideo, "AVMediaTypeVideo", false)
 	av.obj(&avSessionPresetInputPriority, "AVCaptureSessionPresetInputPriority", false)
 	av.obj(&avDeviceTypeBuiltInWideAngle, "AVCaptureDeviceTypeBuiltInWideAngleCamera", true)
+	av.obj(&avDeviceTypeBuiltInUltraWide, "AVCaptureDeviceTypeBuiltInUltraWideCamera", true)
+	av.obj(&avDeviceTypeBuiltInTelephoto, "AVCaptureDeviceTypeBuiltInTelephotoCamera", true)
 	av.obj(&avDeviceTypeExternal, "AVCaptureDeviceTypeExternal", true)
 	av.obj(&avDeviceTypeExternalUnknown, "AVCaptureDeviceTypeExternalUnknown", true)
 	av.obj(&avDeviceTypeContinuity, "AVCaptureDeviceTypeContinuityCamera", true)
 	av.obj(&avSessionRuntimeErrorNotification, "AVCaptureSessionRuntimeErrorNotification", true)
 	av.obj(&avSessionErrorKey, "AVCaptureSessionErrorKey", true)
 	av.obj(&avDeviceWasDisconnectedNotification, "AVCaptureDeviceWasDisconnectedNotification", true)
+	av.obj(&avSessionWasInterruptedNotification, "AVCaptureSessionWasInterruptedNotification", true)
+	av.obj(&avSessionInterruptionEndedNote, "AVCaptureSessionInterruptionEndedNotification", true)
+	loadPlatform(open)
 
 	if len(errs) > 0 {
 		return errors.New("avfoundation: missing symbols: " + strings.Join(errs, ", "))
@@ -199,31 +212,32 @@ func doLoad() error {
 
 // Selectors, registered once: sel_registerName takes the runtime lock.
 var (
-	selAlloc, selInit, selNew, selRelease, selRetain, selDrain          objc.SEL
-	selCount, selObjectAtIndex, selUTF8String, selIsEqualToString       objc.SEL
-	selStringWithUTF8String, selArrayWithObjectsCount                   objc.SEL
-	selNumberWithUnsignedInt, selDictionaryWithObjectForKey             objc.SEL
-	selRespondsToSelector, selLocalizedDescription, selCode             objc.SEL
-	selMainBundle, selObjectForInfoDictionaryKey, selBoolValue          objc.SEL
-	selDiscoverySession, selDevices, selDevicesWithMediaType            objc.SEL
-	selDeviceWithUniqueID, selUniqueID, selLocalizedName                objc.SEL
-	selPosition, selDeviceType, selFormats, selFormatDescription        objc.SEL
-	selFrameRateRanges, selMinFrameRate, selMaxFrameRate                objc.SEL
-	selMinFrameDuration, selMaxFrameDuration                            objc.SEL
-	selAuthorizationStatus, selRequestAccess                            objc.SEL
-	selDeviceInputWithDevice, selCanAddInput, selAddInput               objc.SEL
-	selCanAddOutput, selAddOutput, selBeginConfiguration                objc.SEL
-	selCommitConfiguration, selSetSessionPreset, selCanSetSessionPreset objc.SEL
-	selLockForConfiguration, selUnlockForConfiguration                  objc.SEL
-	selSetActiveFormat, selSetActiveMinFrameDuration                    objc.SEL
-	selSetActiveMaxFrameDuration                                        objc.SEL
-	selSetVideoSettings, selSetAlwaysDiscards, selSetDelegate           objc.SEL
-	selStartRunning, selStopRunning, selIsRunning                       objc.SEL
-	selRemoveInput, selRemoveOutput                                     objc.SEL
-	selDidOutput, selDidDrop                                            objc.SEL
-	selRuntimeError, selDisconnected, selDefaultCenter                  objc.SEL
-	selAddObserver, selRemoveObserver, selUserInfo, selObjectForKey     objc.SEL
-	selTransportType, selSystemPreferredCamera, selDefaultDevice        objc.SEL
+	selAlloc, selInit, selNew, selRelease, selRetain, selDrain              objc.SEL
+	selCount, selObjectAtIndex, selUTF8String, selIsEqualToString           objc.SEL
+	selStringWithUTF8String, selArrayWithObjectsCount                       objc.SEL
+	selNumberWithUnsignedInt, selDictionaryWithObjectForKey                 objc.SEL
+	selRespondsToSelector, selLocalizedDescription, selCode                 objc.SEL
+	selMainBundle, selObjectForInfoDictionaryKey, selBoolValue              objc.SEL
+	selDiscoverySession, selDevices, selDevicesWithMediaType                objc.SEL
+	selDeviceWithUniqueID, selUniqueID, selLocalizedName                    objc.SEL
+	selPosition, selDeviceType, selFormats, selFormatDescription            objc.SEL
+	selFrameRateRanges, selMinFrameRate, selMaxFrameRate                    objc.SEL
+	selMinFrameDuration, selMaxFrameDuration                                objc.SEL
+	selAuthorizationStatus, selRequestAccess                                objc.SEL
+	selDeviceInputWithDevice, selCanAddInput, selAddInput                   objc.SEL
+	selCanAddOutput, selAddOutput, selBeginConfiguration                    objc.SEL
+	selCommitConfiguration, selSetSessionPreset, selCanSetSessionPreset     objc.SEL
+	selLockForConfiguration, selUnlockForConfiguration                      objc.SEL
+	selSetActiveFormat, selSetActiveMinFrameDuration                        objc.SEL
+	selSetActiveMaxFrameDuration                                            objc.SEL
+	selSetVideoSettings, selSetAlwaysDiscards, selSetDelegate               objc.SEL
+	selStartRunning, selStopRunning, selIsRunning                           objc.SEL
+	selRemoveInput, selRemoveOutput                                         objc.SEL
+	selDidOutput, selDidDrop                                                objc.SEL
+	selRuntimeError, selDisconnected, selDefaultCenter                      objc.SEL
+	selAddObserver, selRemoveObserver, selUserInfo, selObjectForKey         objc.SEL
+	selTransportType, selSystemPreferredCamera, selDefaultDevice            objc.SEL
+	selInterrupted, selInterruptionEnded, selBecameActive, selIsInterrupted objc.SEL
 )
 
 func initSelectors() {
@@ -274,6 +288,10 @@ func initSelectors() {
 	// anything NSObject or a category might define.
 	selRuntimeError = r("hwcameraSessionRuntimeError:")
 	selDisconnected = r("hwcameraDeviceDisconnected:")
+	selInterrupted = r("hwcameraSessionInterrupted:")
+	selInterruptionEnded = r("hwcameraSessionInterruptionEnded:")
+	selBecameActive = r("hwcameraApplicationDidBecomeActive:")
+	selIsInterrupted = r("isInterrupted")
 	selDefaultCenter = r("defaultCenter")
 	selAddObserver = r("addObserver:selector:name:object:")
 	selRemoveObserver = r("removeObserver:")
