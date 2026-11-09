@@ -4,7 +4,7 @@
 //	hwcamera snap -o frame.png            # one frame as PNG (or .jpg)
 //	hwcamera check                        # capture from every camera, report a Markdown table
 //	hwcamera mics                         # audio inputs
-//	hwcamera rec -o rec.wav -seconds 5    # record the default microphone
+//	hwcamera rec -o rec.wav -duration 30s # record the default microphone
 //
 // Set HWCAMERA_BACKEND to restrict the backends (v4l2, avfoundation,
 // mediafoundation).
@@ -57,7 +57,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hwcamera list | snap [-device ID] [-size WxH] [-o file.png] | check [-frames N] | mics | rec [-device ID] [-o file.wav] [-seconds N]")
+	fmt.Fprintln(os.Stderr, "usage: hwcamera list | snap [-device ID] [-size WxH] [-o file.png] | check [-frames N] | mics | rec [-device ID] [-o file.wav] [-duration 30s]")
 	os.Exit(2)
 }
 

@@ -48,7 +48,7 @@ func rec(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("rec", flag.ExitOnError)
 	device := fs.String("device", "", "input ID (see mics); empty for the default input")
 	out := fs.String("o", "rec.wav", "output WAV file")
-	seconds := fs.Float64("seconds", 5, "length (0 = until Ctrl-C)")
+	duration := fs.Duration("duration", 5*time.Second, "length, e.g. 30s or 2m (0 = until Ctrl-C)")
 	rate := fs.Int("rate", 48000, "sample rate")
 	channels := fs.Int("channels", 1, "channels")
 	fs.Parse(args)
@@ -68,7 +68,7 @@ func rec(ctx context.Context, args []string) error {
 	writeWAVHeader(f, mic.SampleRate(), mic.Channels(), 0)
 	fmt.Printf("recording \"%s\" (%s) at %d Hz, %d ch -> %s\n", mic.Info().Name, mic.Info().Backend, mic.SampleRate(), mic.Channels(), *out)
 
-	limit := time.Duration(*seconds * float64(time.Second))
+	limit := *duration
 	var frames, gaps int
 	var total time.Duration
 	for limit == 0 || total < limit {

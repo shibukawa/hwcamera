@@ -1,7 +1,7 @@
 // Command record encodes the camera into an MP4 file with the hardware
 // encoder (hwmediacodec):
 //
-//	go run ./record -o camera.mp4 -seconds 10
+//	go run ./record -o camera.mp4 -duration 10s
 //	go run ./record -codec hevc -size 1920x1080 -fps 30 -bitrate 8000000
 //
 // Ctrl-C ends the recording early; the file is finished either way.
@@ -30,7 +30,7 @@ func main() {
 	size := flag.String("size", "1280x720", "capture size")
 	fps := flag.Float64("fps", 30, "frame rate")
 	bitrate := flag.Int("bitrate", 4_000_000, "bits per second")
-	seconds := flag.Float64("seconds", 10, "length (0 = until Ctrl-C)")
+	duration := flag.Duration("duration", 10*time.Second, "length, e.g. 10s or 2m (0 = until Ctrl-C)")
 	flag.Parse()
 
 	var w, h int
@@ -44,9 +44,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if *seconds > 0 {
+	if *duration > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(*seconds*float64(time.Second)))
+		ctx, cancel = context.WithTimeout(ctx, *duration)
 		defer cancel()
 	}
 
