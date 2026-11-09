@@ -201,3 +201,7 @@ a model; that saves one conversion. See `examples/npu`.
 - No camera controls yet (exposure, focus, white balance, zoom).
 - No still-image capture at sensor resolution, no depth or IR streams.
 - iOS, Android and browsers (`getUserMedia`) have no backend yet.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
