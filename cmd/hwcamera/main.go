@@ -75,7 +75,6 @@ func hint() string {
 
 func list(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	all := fs.Bool("all", false, "print every mode (default: the largest few per format)")
 	fs.Parse(args)
 	ds, err := hwcamera.Devices(ctx)
 	if err != nil {
@@ -86,19 +85,9 @@ func list(ctx context.Context, args []string) error {
 		return nil
 	}
 	for _, d := range ds {
-		fmt.Printf("%s  %q  [%s, %s]\n", d.ID, d.Name, d.Backend, d.Position)
-		perFormat := map[hwcamera.PixelFormat]int{}
-		hidden := 0
+		fmt.Printf("%s  \"%s\"  [%s, %s]\n", d.ID, d.Name, d.Backend, d.Position)
 		for _, m := range d.Modes {
-			perFormat[m.Format]++
-			if !*all && perFormat[m.Format] > 6 {
-				hidden++
-				continue
-			}
 			fmt.Println("    ", m)
-		}
-		if hidden > 0 {
-			fmt.Printf("     ... %d more (-all)\n", hidden)
 		}
 	}
 	return nil
@@ -169,7 +158,7 @@ func snap(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s: %dx%d from %q (%s, native %s)\n", *out, f.Width, f.Height, cam.Info().Name, cam.Info().Backend, cam.Mode())
+	fmt.Printf("%s: %dx%d from \"%s\" (%s, native %s)\n", *out, f.Width, f.Height, cam.Info().Name, cam.Info().Backend, cam.Mode())
 	return nil
 }
 

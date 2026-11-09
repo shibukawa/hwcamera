@@ -34,7 +34,7 @@ func mics(ctx context.Context, args []string) error {
 		if d.Monitor {
 			kind = ", monitor"
 		}
-		fmt.Printf("%s %s  %q  [%s%s, %d Hz, %d ch]\n", mark, d.ID, d.Name, d.Backend, kind, d.SampleRate, d.Channels)
+		fmt.Printf("%s %s  \"%s\"  [%s%s, %d Hz, %d ch]\n", mark, d.ID, d.Name, d.Backend, kind, d.SampleRate, d.Channels)
 		shown++
 	}
 	if shown == 0 {
@@ -66,7 +66,7 @@ func rec(ctx context.Context, args []string) error {
 	}
 	defer f.Close()
 	writeWAVHeader(f, mic.SampleRate(), mic.Channels(), 0)
-	fmt.Printf("recording %q (%s) at %d Hz, %d ch -> %s\n", mic.Info().Name, mic.Info().Backend, mic.SampleRate(), mic.Channels(), *out)
+	fmt.Printf("recording \"%s\" (%s) at %d Hz, %d ch -> %s\n", mic.Info().Name, mic.Info().Backend, mic.SampleRate(), mic.Channels(), *out)
 
 	limit := time.Duration(*seconds * float64(time.Second))
 	var frames, gaps int
