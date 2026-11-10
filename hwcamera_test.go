@@ -136,6 +136,11 @@ func TestOpenWithKind(t *testing.T) {
 		{"fake0", External, "fake0"},
 		{"fake0", Front, ""},
 		{"vcam", Physical, ""},
+		{"", Low, "fake0"}, // the fake modes are 64x48
+		{"", External | Low | Landscape | R4_3, "fake0"},
+		{"", High, ""},
+		{"fake0", R16_9, ""},
+		{"", Virtual | Low, "vcam"},
 	} {
 		cam, err := Open(ctx, c.id, WithKind(c.kind))
 		if c.want == "" {

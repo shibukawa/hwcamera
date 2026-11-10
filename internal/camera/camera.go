@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -112,6 +113,10 @@ func (l Lens) String() string {
 // Kind is a set of camera traits, combined with |. A camera matches a
 // Kind when it has every trait in it: Back|UltraWide is the back
 // ultra-wide camera, and Front|Back matches nothing.
+//
+// The first traits describe the device; the rest (resolution class and
+// aspect ratio) describe a mode, and a device has them when one of its
+// modes has.
 type Kind uint32
 
 const (
@@ -123,6 +128,28 @@ const (
 	KindTelephoto
 	KindPhysical
 	KindVirtual
+
+	KindLow       // up to 480,000 pixels (800x600, 854x480, 640x480 and smaller)
+	KindMid       // up to 1,228,800 pixels (1280x960, 1280x720, 1024x768)
+	KindHigh      // more (1920x1080 and up)
+	KindSquare    // width = height (within 2%)
+	KindLandscape // wider than high (the default when no shape is given)
+	KindPortrait  // higher than wide
+	KindR4_3      // 4:3 or 3:4 (within 2%)
+	KindR16_9     // 16:9 or 9:16 (within 2%)
+
+	// DeviceKinds and ModeKinds split a Kind into its two halves.
+	DeviceKinds = KindFront | KindBack | KindExternal | KindWide | KindUltraWide | KindTelephoto | KindPhysical | KindVirtual
+	ModeKinds   = KindLow | KindMid | KindHigh | KindSquare | KindLandscape | KindPortrait | KindR4_3 | KindR16_9
+	// SizeKinds are the resolution classes, ShapeKinds the rest.
+	SizeKinds  = KindLow | KindMid | KindHigh
+	ShapeKinds = KindSquare | KindLandscape | KindPortrait | KindR4_3 | KindR16_9
+)
+
+// Pixel counts that bound the resolution classes.
+const (
+	lowMaxPixels = 480_000
+	midMaxPixels = 1_228_800
 )
 
 var kindNames = []struct {
@@ -132,6 +159,9 @@ var kindNames = []struct {
 	{KindFront, "front"}, {KindBack, "back"}, {KindExternal, "external"},
 	{KindWide, "wide"}, {KindUltraWide, "ultrawide"}, {KindTelephoto, "telephoto"},
 	{KindPhysical, "physical"}, {KindVirtual, "virtual"},
+	{KindLow, "low"}, {KindMid, "mid"}, {KindHigh, "high"},
+	{KindSquare, "square"}, {KindLandscape, "landscape"}, {KindPortrait, "portrait"},
+	{KindR4_3, "4:3"}, {KindR16_9, "16:9"},
 }
 
 func (k Kind) String() string {
@@ -151,9 +181,10 @@ func (k Kind) String() string {
 	return strings.Join(parts, "|")
 }
 
-// ParseKind parses traits such as "back", "back+ultrawide" or
-// "front|physical" (separated by +, |, comma or space; case does not
-// matter; "rear", "ultra-wide" and "tele" are accepted too).
+// ParseKind parses traits such as "back", "back+ultrawide",
+// "front|low" or "high,16:9" (separated by +, |, comma or space; case does
+// not matter; "rear", "ultra-wide", "tele", "medium", "4x3" and "r16_9"
+// are accepted too).
 func ParseKind(s string) (Kind, error) {
 	fields := strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return r == '+' || r == '|' || r == ',' || r == ' '
@@ -169,6 +200,12 @@ func ParseKind(s string) (Kind, error) {
 			f = "back"
 		case "tele":
 			f = "telephoto"
+		case "medium", "middle":
+			f = "mid"
+		case "4x3", "r43":
+			f = "4:3"
+		case "16x9", "r169":
+			f = "16:9"
 		}
 		found := false
 		for _, n := range kindNames {
@@ -246,7 +283,8 @@ type DeviceInfo struct {
 	Modes   []Mode
 }
 
-// Kind returns the traits of the camera.
+// Kind returns the device traits of the camera (position, lens,
+// physical or virtual); the mode traits differ per mode, see Mode.Kind.
 func (d DeviceInfo) Kind() Kind {
 	var k Kind
 	switch d.Position {
@@ -273,8 +311,59 @@ func (d DeviceInfo) Kind() Kind {
 	return k
 }
 
-// Is reports whether the camera has every trait of k (always true for 0).
-func (d DeviceInfo) Is(k Kind) bool { return d.Kind()&k == k }
+// Is reports whether the camera has every device trait of k and a mode
+// with every mode trait of k (always true for 0).
+func (d DeviceInfo) Is(k Kind) bool {
+	if dk := k & DeviceKinds; d.Kind()&dk != dk {
+		return false
+	}
+	if k&ModeKinds == 0 {
+		return true
+	}
+	for _, m := range d.Modes {
+		if m.Is(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// Kind returns the resolution class and aspect ratio traits of the mode.
+func (m Mode) Kind() Kind {
+	if m.Width <= 0 || m.Height <= 0 {
+		return 0
+	}
+	var k Kind
+	switch px := m.Width * m.Height; {
+	case px <= lowMaxPixels:
+		k |= KindLow
+	case px <= midMaxPixels:
+		k |= KindMid
+	default:
+		k |= KindHigh
+	}
+	long, short := float64(max(m.Width, m.Height)), float64(min(m.Width, m.Height))
+	near := func(r float64) bool { return math.Abs(long/short-r) <= 0.02*r }
+	switch {
+	case near(1):
+		k |= KindSquare
+	case m.Width > m.Height:
+		k |= KindLandscape
+	default:
+		k |= KindPortrait
+	}
+	if near(4.0 / 3) {
+		k |= KindR4_3
+	}
+	if near(16.0 / 9) {
+		k |= KindR16_9
+	}
+	return k
+}
+
+// Is reports whether the mode has every mode trait of k; device traits
+// in k are ignored.
+func (m Mode) Is(k Kind) bool { mk := k & ModeKinds; return m.Kind()&mk == mk }
 
 // Rank orders devices for automatic choice: the default physical camera,
 // then built-in ones, then other physical ones, then virtual ones.
@@ -450,11 +539,30 @@ func Backends() []Backend {
 // rate win (30 fps when none asked). Format: cfg.Native when set; otherwise
 // the cheapest to turn into cfg.Format (same format, then other raw formats,
 // MJPEG last because it costs a JPEG decode on the CPU).
+//
+// The mode traits of cfg.Kind keep only the modes that have them (an
+// error wrapping ErrNotFound when none does). Without a size, Low aims
+// at 640x480 and Mid at 1280x720, or at 640 and 1280 pixels on the long
+// side with a shape trait (an aspect ratio alone counts as Mid); High
+// takes the largest mode that reaches the frame rate. Without a shape
+// trait, landscape modes are preferred.
 func ChooseMode(modes []Mode, cfg Config) (Mode, error) {
 	if len(modes) == 0 {
 		return Mode{}, ErrUnsupported
 	}
 	cand := modes
+	if mk := cfg.Kind & ModeKinds; mk != 0 {
+		var m []Mode
+		for _, x := range modes {
+			if x.Is(mk) {
+				m = append(m, x)
+			}
+		}
+		if len(m) == 0 {
+			return Mode{}, fmt.Errorf("%w: no %s mode", ErrNotFound, mk)
+		}
+		cand = m
+	}
 	if cfg.Native != Unknown {
 		var m []Mode
 		for _, x := range modes {
@@ -467,13 +575,48 @@ func ChooseMode(modes []Mode, cfg Config) (Mode, error) {
 		}
 		cand = m
 	}
-	wantW, wantH := cfg.Width, cfg.Height
-	if wantW == 0 && wantH == 0 {
-		wantW, wantH = 1280, 720
+	// No shape asked: landscape modes only, so that the square and
+	// portrait modes of cameras like the MacBook's (1552x1552, 1080x1920
+	// for Center Stage) are not picked by size alone. A size that is
+	// square or portrait asks for that shape; a camera without landscape
+	// modes keeps all.
+	if cfg.Kind&ShapeKinds == 0 && !(cfg.Width > 0 && cfg.Height >= cfg.Width) {
+		var m []Mode
+		for _, x := range cand {
+			if x.Width > x.Height {
+				m = append(m, x)
+			}
+		}
+		if len(m) > 0 {
+			cand = m
+		}
 	}
+	wantW, wantH := cfg.Width, cfg.Height
 	wantFPS := cfg.FrameRate
 	if wantFPS == 0 {
 		wantFPS = 30
+	}
+	if wantW == 0 && wantH == 0 {
+		low := cfg.Kind&KindLow != 0
+		switch {
+		case cfg.Kind&KindHigh != 0:
+			wantW, wantH = largest(cand, wantFPS)
+		case cfg.Kind&ShapeKinds == 0 && low:
+			wantW, wantH = 640, 480
+		case cfg.Kind&ShapeKinds == 0:
+			wantW, wantH = 1280, 720
+		default:
+			// The long side; the other follows each mode's shape.
+			long := 1280
+			if low {
+				long = 640
+			}
+			if cfg.Kind&KindPortrait != 0 {
+				wantH = long
+			} else {
+				wantW = long
+			}
+		}
 	}
 
 	type scored struct {
@@ -518,6 +661,26 @@ func ChooseMode(modes []Mode, cfg Config) (Mode, error) {
 		return false
 	})
 	return all[0].m, nil
+}
+
+// largest returns the size of the largest mode that reaches fps, or of
+// the largest mode when none does.
+func largest(ms []Mode, fps float64) (w, h int) {
+	best, bestFast := -1, -1
+	for i, m := range ms {
+		if best < 0 || m.Width*m.Height > ms[best].Width*ms[best].Height {
+			best = i
+		}
+		if fr := m.MaxFrameRate(); fr == 0 || fr+0.5 >= fps {
+			if bestFast < 0 || m.Width*m.Height > ms[bestFast].Width*ms[bestFast].Height {
+				bestFast = i
+			}
+		}
+	}
+	if bestFast >= 0 {
+		best = bestFast
+	}
+	return ms[best].Width, ms[best].Height
 }
 
 func formatCost(native, want PixelFormat) int64 {

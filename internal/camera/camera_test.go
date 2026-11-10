@@ -1,6 +1,9 @@
 package camera
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 var uvc = []Mode{
 	{Format: MJPEG, Width: 1920, Height: 1080, FrameRates: []float64{30}},
@@ -108,6 +111,11 @@ func TestParseKind(t *testing.T) {
 		"back, tele":         KindBack | KindTelephoto,
 		"external physical":  KindExternal | KindPhysical,
 		"front|back|virtual": KindFront | KindBack | KindVirtual,
+		"back+low":           KindBack | KindLow,
+		"HIGH,16:9":          KindHigh | KindR16_9,
+		"medium 4x3":         KindMid | KindR4_3,
+		"r16_9+portrait":     KindR16_9 | KindPortrait,
+		"square":             KindSquare,
 	} {
 		got, err := ParseKind(in)
 		if err != nil || got != want {
@@ -118,5 +126,123 @@ func TestParseKind(t *testing.T) {
 		if _, err := ParseKind(in); err == nil {
 			t.Errorf("ParseKind(%q): no error", in)
 		}
+	}
+}
+
+func TestModeKind(t *testing.T) {
+	for _, c := range []struct {
+		w, h int
+		want Kind
+	}{
+		{640, 480, KindLow | KindLandscape | KindR4_3},
+		{640, 360, KindLow | KindLandscape | KindR16_9},
+		{854, 480, KindLow | KindLandscape | KindR16_9},
+		{800, 600, KindLow | KindLandscape | KindR4_3},
+		{1280, 720, KindMid | KindLandscape | KindR16_9},
+		{1280, 960, KindMid | KindLandscape | KindR4_3},
+		{1280, 800, KindMid | KindLandscape},
+		{1920, 1080, KindHigh | KindLandscape | KindR16_9},
+		{4032, 3024, KindHigh | KindLandscape | KindR4_3},
+		{1080, 1920, KindHigh | KindPortrait | KindR16_9},
+		{480, 480, KindLow | KindSquare},
+	} {
+		if got := (Mode{Width: c.w, Height: c.h}).Kind(); got != c.want {
+			t.Errorf("%dx%d: %s, want %s", c.w, c.h, got, c.want)
+		}
+	}
+}
+
+func TestChooseModeKind(t *testing.T) {
+	modes := []Mode{
+		{Format: NV12, Width: 3840, Height: 2160, FrameRates: []float64{15}},
+		{Format: NV12, Width: 1920, Height: 1080, FrameRates: []float64{30}},
+		{Format: NV12, Width: 1440, Height: 1080, FrameRates: []float64{30}},
+		{Format: NV12, Width: 1280, Height: 960, FrameRates: []float64{30}},
+		{Format: NV12, Width: 1280, Height: 720, FrameRates: []float64{30}},
+		{Format: NV12, Width: 640, Height: 480, FrameRates: []float64{30}},
+		{Format: NV12, Width: 640, Height: 360, FrameRates: []float64{30}},
+		{Format: NV12, Width: 320, Height: 240, FrameRates: []float64{30}},
+	}
+	for _, c := range []struct {
+		kind  Kind
+		w, h  int // asked size
+		fps   float64
+		wantW int
+		wantH int
+	}{
+		{KindLow, 0, 0, 0, 640, 480},
+		{KindLow | KindR16_9, 0, 0, 0, 640, 360},
+		{KindMid, 0, 0, 0, 1280, 720},
+		{KindR4_3, 0, 0, 0, 1280, 960},
+		{KindHigh, 0, 0, 0, 1920, 1080},            // 4K only reaches 15 fps
+		{KindHigh, 0, 0, 15, 3840, 2160},           // which is enough here
+		{KindHigh | KindR4_3, 0, 0, 0, 1440, 1080}, // 1440x1080 is 4:3
+		{KindLow, 320, 240, 0, 320, 240},           // a size wins inside the class
+		{KindHigh | KindPhysical, 0, 0, 0, 1920, 1080},
+	} {
+		m, err := ChooseMode(modes, Config{Kind: c.kind, Width: c.w, Height: c.h, FrameRate: c.fps})
+		if err != nil {
+			t.Errorf("%s: %v", c.kind, err)
+			continue
+		}
+		if m.Width != c.wantW || m.Height != c.wantH {
+			t.Errorf("%s %dx%d@%v: %dx%d, want %dx%d", c.kind, c.w, c.h, c.fps, m.Width, m.Height, c.wantW, c.wantH)
+		}
+	}
+	for _, k := range []Kind{KindSquare, KindPortrait, KindLow | KindMid, KindMid | KindR4_3 | KindR16_9} {
+		if _, err := ChooseMode(modes, Config{Kind: k}); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: err = %v, want ErrNotFound", k, err)
+		}
+	}
+	d := DeviceInfo{Position: PositionBack, Modes: modes}
+	if !d.Is(KindBack|KindHigh|KindR16_9) || d.Is(KindBack|KindSquare) || d.Is(KindFront|KindLow) {
+		t.Error("DeviceInfo.Is with mode traits")
+	}
+}
+
+// The FaceTime HD camera of a MacBook (M2) lists square and portrait
+// modes for Center Stage among the usual ones.
+var facetime = []Mode{
+	{Format: NV12, Width: 1552, Height: 1552, FrameRates: []float64{30, 15}},
+	{Format: NV12, Width: 1760, Height: 1328, FrameRates: []float64{30, 15}},
+	{Format: NV12, Width: 1328, Height: 1760, FrameRates: []float64{30, 15}},
+	{Format: NV12, Width: 1920, Height: 1080, FrameRates: []float64{30, 15}},
+	{Format: NV12, Width: 1080, Height: 1920, FrameRates: []float64{30, 15}},
+	{Format: NV12, Width: 1280, Height: 720, FrameRates: []float64{30, 15}},
+	{Format: NV12, Width: 640, Height: 480, FrameRates: []float64{30, 15}},
+}
+
+func TestChooseModeLandscapeByDefault(t *testing.T) {
+	for _, c := range []struct {
+		kind         Kind
+		w, h         int
+		wantW, wantH int
+	}{
+		{0, 0, 0, 1280, 720},
+		{KindHigh, 0, 0, 1760, 1328}, // not the larger 1552x1552
+		{KindHigh | KindR16_9, 0, 0, 1920, 1080},
+		{KindLow, 0, 0, 640, 480},
+		{0, 1600, 1600, 1552, 1552}, // a square size asks for square
+		{KindSquare, 0, 0, 1552, 1552},
+		{KindPortrait, 0, 0, 1328, 1760},
+		{KindPortrait | KindR16_9, 0, 0, 1080, 1920},
+		{KindHigh | KindPortrait, 0, 0, 1328, 1760},
+		{0, 1080, 1920, 1080, 1920}, // a portrait size asks for portrait
+		{0, 1552, 1552, 1552, 1552},
+		{0, 1600, 0, 1760, 1328}, // a width alone stays landscape
+	} {
+		m, err := ChooseMode(facetime, Config{Kind: c.kind, Width: c.w, Height: c.h})
+		if err != nil {
+			t.Errorf("%s %dx%d: %v", c.kind, c.w, c.h, err)
+			continue
+		}
+		if m.Width != c.wantW || m.Height != c.wantH {
+			t.Errorf("%s %dx%d: %dx%d, want %dx%d", c.kind, c.w, c.h, m.Width, m.Height, c.wantW, c.wantH)
+		}
+	}
+	// A camera with portrait modes only still opens.
+	m, err := ChooseMode([]Mode{{Format: NV12, Width: 720, Height: 1280}}, Config{})
+	if err != nil || m.Width != 720 {
+		t.Errorf("portrait-only camera: %v %v", m, err)
 	}
 }

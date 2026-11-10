@@ -48,7 +48,11 @@ func main() {
 		usage()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "hwcamera:", err)
+		msg := err.Error()
+		if !strings.HasPrefix(msg, "hwcamera") { // the library's errors say it already
+			msg = "hwcamera: " + msg
+		}
+		fmt.Fprintln(os.Stderr, msg)
 		if errors.Is(err, hwcamera.ErrPermission) {
 			fmt.Fprintln(os.Stderr, hint())
 		}
@@ -57,7 +61,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hwcamera list | snap [-device ID|front|back+ultrawide] [-size WxH] [-o file.png] | check [-frames N] | mics | rec [-device ID] [-o file.wav] [-duration 30s]")
+	fmt.Fprintln(os.Stderr, "usage: hwcamera list | snap [-device ID|front|back+ultrawide|low] [-size WxH] [-o file.png] | check [-frames N] | mics | rec [-device ID] [-o file.wav] [-duration 30s]")
 	os.Exit(2)
 }
 
@@ -116,7 +120,7 @@ func parseSize(s string) (int, int, error) {
 
 func snap(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("snap", flag.ExitOnError)
-	device := fs.String("device", "", "camera ID (see list), or a kind such as front, back or back+ultrawide")
+	device := fs.String("device", "", "camera ID (see list), or a kind such as front, back+ultrawide, low or high+16:9")
 	size := fs.String("size", "", "WxH (default 1280x720 or nearest)")
 	out := fs.String("o", "frame.png", "output .png or .jpg")
 	skip := fs.Int("skip", 10, "frames to drop first while exposure settles")
