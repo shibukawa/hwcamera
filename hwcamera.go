@@ -78,10 +78,21 @@ const (
 	Telephoto = camera.KindTelephoto // a 2x or longer lens (Lens)
 	Physical  = camera.KindPhysical  // a real camera (not Virtual)
 	Virtual   = camera.KindVirtual   // a software camera (Virtual)
+
+	// Mode traits: a camera has them when one of its modes has, and
+	// Open then runs in such a mode.
+	Low       = camera.KindLow       // up to 480,000 pixels; aims at 640 on the long side (image analysis)
+	Mid       = camera.KindMid       // up to 1,228,800 pixels; aims at 1280 (1280x720)
+	High      = camera.KindHigh      // more; the largest mode that reaches the frame rate
+	Square    = camera.KindSquare    // width = height
+	Landscape = camera.KindLandscape // wider than high; the default when no shape is given
+	Portrait  = camera.KindPortrait  // higher than wide (rare: sensors deliver landscape)
+	R4_3      = camera.KindR4_3      // 4:3 (or 3:4)
+	R16_9     = camera.KindR16_9     // 16:9 (or 9:16)
 )
 
 // ParseKind parses traits such as "back", "back+ultrawide" or
-// "front,physical", for command-line flags.
+// "front,low,4:3", for command-line flags.
 func ParseKind(s string) (Kind, error) { return camera.ParseKind(s) }
 
 var (
@@ -167,15 +178,25 @@ func WithFormat(f PixelFormat) Option { return func(c *camera.Config) { c.Format
 // resolutions or rates that a USB 2 camera offers only as MJPEG.
 func WithNativeFormat(f PixelFormat) Option { return func(c *camera.Config) { c.Native = f } }
 
-// WithKind makes Open pick only a camera that has every trait of k, for
-// example WithKind(Front) or WithKind(Back|Telephoto). Open returns an
-// error wrapping ErrNotFound when no camera matches; it never falls back
-// to another kind. With an ID, the camera must match too.
+// WithKind makes Open pick only a camera, and a mode of it, that has
+// every trait of k: WithKind(Front), WithKind(Back|Telephoto),
+// WithKind(Low) for image analysis, WithKind(High|R16_9). Open returns an
+// error wrapping ErrNotFound when nothing matches; it never falls back to
+// another kind. With an ID, the camera must match too. Several WithKind
+// options add up.
+//
+// A resolution class (Low, Mid, High) chooses the size when WithSize is
+// not given; with WithSize it only restricts the modes. Frames are never
+// scaled or cropped. Without a shape trait (Square, Landscape, Portrait,
+// R4_3, R16_9) only landscape modes are used, unless WithSize asks for a
+// square or portrait size: Square and Portrait choose the Center Stage
+// modes of a MacBook camera, which few other cameras offer; for a square
+// network input use the tensor package's crop or letterbox.
 //
 // Front and Back are known on phones, Macs, Windows (from the panel
 // location or the USB port) and Linux (from the USB port); the lens only
 // on iOS, Android and Mac built-in cameras.
-func WithKind(k Kind) Option { return func(c *camera.Config) { c.Kind = k } }
+func WithKind(k Kind) Option { return func(c *camera.Config) { c.Kind |= k } }
 
 // WithBuffers sets the number of frames the driver may hold in flight (V4L2;
 // default 4). Frames not released block the driver once all are out.

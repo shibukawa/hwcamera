@@ -84,8 +84,21 @@ for {
   // errors.Is(err, hwcamera.ErrNotFound) when there is none; no fallback
   ```
 
+  The mode traits pick the mode: the resolution class (`Low` up to
+  480,000 pixels, aiming at 640x480: the one for image analysis; `Mid` up
+  to 1280x960, aiming at 1280x720; `High` above, the largest mode that
+  reaches the frame rate) and the shape (`Square`, `Landscape`,
+  `Portrait`, `R4_3`, `R16_9`). `WithKind(hwcamera.Front|hwcamera.Low|hwcamera.R4_3)`
+  needs a front camera with a small 4:3 mode and runs in it. Without a
+  shape trait only landscape modes are used (unless `WithSize` asks for a
+  square or portrait size): the MacBook's FaceTime camera lists 1552x1552
+  and 1080x1920 for Center Stage next to 1920x1080, and `High` alone
+  would otherwise take the square one. `Square` and `Portrait` choose
+  those modes; frames are never cropped, so for a square network input on
+  other cameras crop or letterbox with the `tensor` package.
+
   Among the matches the order above applies. `DeviceInfo.Kind()` and
-  `Is(k)` tell a listed camera's traits; `ParseKind("back+ultrawide")`
+  `Is(k)` tell a listed camera's traits; `ParseKind("back+ultrawide")` or `ParseKind("low,4:3")`
   reads them from a flag, and the `-device` flag of the command and the
   examples takes a kind as well as an ID. The lens is known on iOS,
   Android (from the 35 mm equivalent focal length) and Mac built-in

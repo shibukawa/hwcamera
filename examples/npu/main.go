@@ -134,12 +134,18 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// RGBA from the camera saves a YUV conversion inside tensor.Fill.
-	id, opts := *device, []hwcamera.Option{hwcamera.WithSize(640, 480), hwcamera.WithFormat(hwcamera.RGBA)}
-	if k, err := hwcamera.ParseKind(id); err == nil { // -device back, front+physical, ...
+	// A model takes a few hundred pixels: Low runs the camera at about
+	// 640x480, which tensor.Fill scales down cheaply. RGBA from the camera
+	// saves a YUV conversion inside tensor.Fill.
+	id, kind := *device, hwcamera.Low
+	if k, err := hwcamera.ParseKind(id); err == nil { // -device back, front+high, ...
 		id = ""
-		opts = append(opts, hwcamera.WithKind(k))
+		if k&(hwcamera.Low|hwcamera.Mid|hwcamera.High) != 0 {
+			kind = 0 // the flag chose the resolution
+		}
+		kind |= k
 	}
+	opts := []hwcamera.Option{hwcamera.WithKind(kind), hwcamera.WithFormat(hwcamera.RGBA)}
 	cam, err := hwcamera.Open(ctx, id, opts...)
 	if err != nil {
 		log.Fatal(err)
