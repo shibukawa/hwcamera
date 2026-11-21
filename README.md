@@ -28,9 +28,42 @@ an NPU.
 | `.../tensor` | Frame → input tensor: stretch / letterbox / centre crop, RGB / BGR / gray, NCHW / NHWC, float32 / float16 / uint8 / int8, mean and std; maps model coordinates back to the frame |
 | `.../mediacodec` | Separate module: the camera as a `hwmediacodec.FrameReader`, an encoder sized for the camera, `Record` (camera → encoder → any `PacketWriter`: MP4, HLS, WebRTC) |
 | `.../examples` | Separate module: `preview` (camera in an Ebitengine window), `record` (MP4), `hls` (live stream to browsers), `npu` (image model on the NPU over camera frames) |
-| `.../cmd/hwcamera` | `list`, `snap`, `check` |
+| `.../cmd` | Separate module with the tools: `hwcamera` (GUI) and `hwcamera-cli` (see [Tools](#tools)) |
 
 The core module depends only on purego and `golang.org/x/sys`.
+
+## Tools
+
+`hwcamera` opens a window with the camera preview, menus for the camera,
+its mode and the microphone (with a level meter), snapshots, and
+recording of video, audio or both. For whatever it does, it shows the
+equivalent `hwcamera-cli` command with a button that copies it.
+
+```sh
+go install github.com/shibukawa/hwcamera/cmd/hwcamera@latest
+hwcamera                     # saves into ~/Movies (or ~/Videos); -o DIR to change
+```
+
+`hwcamera-cli` is the command-line side, for scripts and for machines
+without a display:
+
+```sh
+go install github.com/shibukawa/hwcamera/cmd/hwcamera-cli@latest
+hwcamera-cli list                          # cameras and their modes
+hwcamera-cli mics                          # microphones
+hwcamera-cli snap -o frame.png             # one frame
+hwcamera-cli rec -o clip                   # clip.mp4: hardware H.264 + AAC, until Ctrl-C
+hwcamera-cli rec -media video -duration 10s -codec hevc
+hwcamera-cli rec -media audio -o voice     # voice.wav
+hwcamera-cli check                         # Markdown report of capture on every camera
+```
+
+Video and audio go into one MP4: the video through the hardware encoder
+of [hwmediacodec](https://github.com/shibukawa/hwmediacodec) (H.264 or
+HEVC), the audio as AAC through the operating system's encoder. Video
+alone is an MP4 too; audio alone goes into a 16-bit WAV file. `hwcamera-cli` builds with `CGO_ENABLED=0`
+everywhere; `hwcamera` does on macOS and Windows, while Ebitengine needs cgo
+on Linux.
 
 ## Status
 
@@ -43,7 +76,7 @@ The core module depends only on purego and `golang.org/x/sys`.
 Please run the check on your machine and report the output in an issue:
 
 ```sh
-go run github.com/shibukawa/hwcamera/cmd/hwcamera@latest check
+go run github.com/shibukawa/hwcamera/cmd/hwcamera-cli@latest check
 ```
 
 ## Usage

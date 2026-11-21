@@ -25,7 +25,7 @@ import (
 
 func main() {
 	out := flag.String("o", "camera.mp4", "output file")
-	device := flag.String("device", "", "camera ID (hwcamera list); empty for the first camera")
+	device := flag.String("device", "", "camera ID (hwcamera-cli list); empty for the first camera")
 	codecName := flag.String("codec", "h264", "h264 or hevc")
 	size := flag.String("size", "1280x720", "capture size")
 	fps := flag.Float64("fps", 30, "frame rate")

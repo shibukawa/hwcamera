@@ -1,13 +1,18 @@
-// Command hwcamera lists cameras, takes snapshots and checks capture:
+// Command hwcamera is a window for the cameras and microphones of the
+// machine: live preview, switching devices and modes, snapshots, and
+// recording video (hardware H.264 / HEVC into MP4), audio (WAV) or both.
 //
-//	hwcamera list                         # cameras and their modes
-//	hwcamera snap -o frame.png            # one frame as PNG (or .jpg)
-//	hwcamera check                        # capture from every camera, report a Markdown table
-//	hwcamera mics                         # audio inputs
-//	hwcamera rec -o rec.wav -duration 30s # record the default microphone
+//	go install github.com/shibukawa/hwcamera/cmd/hwcamera@latest
+//	hwcamera [-camera ID] [-mic ID] [-o DIR]
 //
-// Set HWCAMERA_BACKEND to restrict the backends (v4l2, avfoundation,
-// mediafoundation).
+// For everything it does, the window shows the matching hwcamera-cli
+// command, the scriptable side:
+//
+//	go install github.com/shibukawa/hwcamera/cmd/hwcamera-cli@latest
+//	hwcamera-cli rec -duration 10s -o clip   # clip.mp4 with H.264 + AAC
+//
+// Video and audio go into one MP4 (hardware H.264 / HEVC and AAC); audio
+// alone goes into a WAV file.
 package main
 
 import (
@@ -16,273 +21,478 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/jpeg"
 	"image/png"
+	"log"
 	"os"
 	"path/filepath"
-	"runtime"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/ebitengine/debugui"
+	"github.com/hajimehoshi/ebiten/v2"
+
 	"github.com/shibukawa/hwcamera"
+	"github.com/shibukawa/hwcamera/audio"
+	"github.com/shibukawa/hwcamera/cmd/internal/session"
 )
 
+const panelWidth = 400 // width of the control panel, in window points
+
+var (
+	mediaChoices = []session.Media{session.Both, session.Video, session.Audio}
+	mediaNames   = []string{"Video + audio", "Video only", "Audio only"}
+	codecChoices = []string{"h264", "hevc"}
+	codecNames   = []string{"H.264", "HEVC"}
+)
+
+// mode is one entry of the mode menu: a size at a frame rate.
+type mode struct {
+	size session.Size
+	fps  float64
+}
+
+type app struct {
+	ui debugui.DebugUI
+
+	cams     []hwcamera.DeviceInfo
+	camNames []string
+	camIdx   int
+	modes    []mode
+	modeKeys []string
+	modeIdx  int
+
+	mics     []audio.DeviceInfo
+	micNames []string
+	micIdx   int
+
+	mediaIdx int
+	codecIdx int
+	output   string // recording path without extension
+	mirror   bool
+
+	cam   *capture
+	mic   *micCapture
+	img   *ebiten.Image
+	last  *image.RGBA // the frame on screen, for snapshots
+	scale float64
+
+	rec      *session.Recording // nil when not recording
+	recStart time.Time
+
+	status   string
+	snapPath string // last snapshot, for the snap command
+
+	// selections the devices were opened with, to notice changes
+	openCam, openMode, openMic int
+
+	quitAfter time.Duration
+	shot      string
+	began     time.Time
+	shotDone  bool
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		usage()
+	camID := flag.String("camera", "", "camera ID to start with (hwcamera-cli list)")
+	micID := flag.String("mic", "", "microphone ID to start with (hwcamera-cli mics)")
+	dir := flag.String("o", session.OutputDir(), "folder for recordings and snapshots")
+	quitAfter := flag.Duration("quit-after", 0, "quit after this long (for scripted checks)")
+	shot := flag.String("shot", "", "with -quit-after: save the window to this PNG before quitting")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: hwcamera [-camera ID] [-mic ID] [-o DIR]\n\nOpens a window with the camera preview, device switching and recording.\nThe command-line tool is hwcamera-cli (go install github.com/shibukawa/hwcamera/cmd/hwcamera-cli@latest).\n\nflags:")
+		flag.PrintDefaults()
 	}
-	ctx := context.Background()
-	var err error
-	switch os.Args[1] {
-	case "list":
-		err = list(ctx, os.Args[2:])
-	case "snap":
-		err = snap(ctx, os.Args[2:])
-	case "check":
-		err = check(ctx, os.Args[2:])
-	case "mics":
-		err = mics(ctx, os.Args[2:])
-	case "rec":
-		err = rec(ctx, os.Args[2:])
-	default:
-		usage()
-	}
+	flag.Parse()
+
+	a := &app{openCam: -1, openMode: -1, openMic: -1, quitAfter: *quitAfter, shot: *shot}
+	abs, err := filepath.Abs(*dir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "hwcamera:", err)
-		if errors.Is(err, hwcamera.ErrPermission) {
-			fmt.Fprintln(os.Stderr, hint())
-		}
-		os.Exit(1)
+		log.Fatal(err)
+	}
+	a.output = filepath.Join(abs, session.Stamp("hwcamera"))
+	a.scanDevices(*camID, *micID)
+	defer a.closeDevices()
+
+	ebiten.SetWindowTitle("hwcamera")
+	ebiten.SetWindowSize(1280, 760)
+	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+	if err := ebiten.RunGame(a); err != nil && !errors.Is(err, ebiten.Termination) {
+		log.Fatal(err)
 	}
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: hwcamera list | snap [-device ID] [-size WxH] [-o file.png] | check [-frames N] | mics | rec [-device ID] [-o file.wav] [-duration 30s]")
-	os.Exit(2)
-}
-
-func hint() string {
-	switch runtime.GOOS {
-	case "linux":
-		return "hint: add yourself to the video group (sudo usermod -aG video $USER) and log in again"
-	case "darwin":
-		return "hint: allow the terminal app in System Settings > Privacy & Security > Camera"
-	case "windows":
-		return "hint: turn on Settings > Privacy & security > Camera > Let desktop apps access your camera"
-	}
-	return ""
-}
-
-func list(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	fs.Parse(args)
-	ds, err := hwcamera.Devices(ctx)
-	if err != nil {
-		return err
-	}
-	if len(ds) == 0 {
-		fmt.Println("no cameras (backends:", strings.Join(hwcamera.Backends(), ", ")+")")
-		return nil
-	}
-	for _, d := range ds {
-		tags := []string{d.Backend, d.Position.String()}
-		if d.Default {
-			tags = append(tags, "default")
-		}
-		if d.Virtual {
-			tags = append(tags, "virtual")
-		}
-		fmt.Printf("%s  \"%s\"  [%s]\n", d.ID, d.Name, strings.Join(tags, ", "))
-		for _, m := range d.Modes {
-			fmt.Println("    ", m)
-		}
-	}
-	return nil
-}
-
-func parseSize(s string) (int, int, error) {
-	if s == "" {
-		return 0, 0, nil
-	}
-	var w, h int
-	if _, err := fmt.Sscanf(s, "%dx%d", &w, &h); err != nil {
-		return 0, 0, fmt.Errorf("bad size %q", s)
-	}
-	return w, h, nil
-}
-
-func snap(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("snap", flag.ExitOnError)
-	device := fs.String("device", "", "camera ID (see list)")
-	size := fs.String("size", "", "WxH (default 1280x720 or nearest)")
-	out := fs.String("o", "frame.png", "output .png or .jpg")
-	skip := fs.Int("skip", 10, "frames to drop first while exposure settles")
-	native := fs.String("native", "", "force the native format: mjpeg, yuyv, nv12")
-	fs.Parse(args)
-	w, h, err := parseSize(*size)
-	if err != nil {
-		return err
-	}
-	opts := []hwcamera.Option{hwcamera.WithSize(w, h), hwcamera.WithFormat(hwcamera.RGBA)}
-	if *native != "" {
-		f, err := parseFormat(*native)
-		if err != nil {
-			return err
-		}
-		opts = append(opts, hwcamera.WithNativeFormat(f))
-	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+// scanDevices (re)lists the cameras and microphones, keeping the current
+// selections where they still exist.
+func (a *app) scanDevices(camID, micID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cam, err := hwcamera.Open(ctx, *device, opts...)
-	if err != nil {
-		return err
+	if camID == "" && a.camIdx < len(a.cams) {
+		camID = a.cams[a.camIdx].ID
 	}
-	defer cam.Close()
-	var f *hwcamera.Frame
-	for i := 0; i <= *skip; i++ {
-		if f != nil {
-			f.Release()
+	if micID == "" && a.micIdx > 0 && a.micIdx <= len(a.mics) {
+		micID = a.mics[a.micIdx-1].ID
+	}
+	cams, err := hwcamera.Devices(ctx)
+	if err != nil {
+		a.status = "cameras: " + err.Error()
+	}
+	a.cams = cams
+	a.camNames = nil
+	a.camIdx = -1
+	for i, d := range cams {
+		name := d.Name
+		if d.Virtual {
+			name += " (virtual)"
 		}
-		if f, err = cam.Read(ctx); err != nil {
-			return err
+		a.camNames = append(a.camNames, name)
+		if d.ID == camID {
+			a.camIdx = i
 		}
 	}
-	defer f.Release()
-	img := &image.RGBA{Pix: f.Planes[0], Stride: f.Strides[0], Rect: image.Rect(0, 0, f.Width, f.Height)}
-	file, err := os.Create(*out)
+	if a.camIdx < 0 {
+		a.camIdx = defaultCamera(cams)
+	}
+	if len(cams) == 0 {
+		a.camNames = []string{"(no camera)"}
+	}
+
+	mics, err := audio.Devices(ctx)
 	if err != nil {
-		return err
+		a.status = "microphones: " + err.Error()
 	}
-	switch strings.ToLower(filepath.Ext(*out)) {
-	case ".jpg", ".jpeg":
-		err = jpeg.Encode(file, img, &jpeg.Options{Quality: 92})
-	default:
-		err = png.Encode(file, img)
+	a.mics = nil
+	a.micNames = []string{"(none)"}
+	a.micIdx = 0
+	for _, d := range mics {
+		if d.Monitor {
+			continue
+		}
+		a.mics = append(a.mics, d)
+		a.micNames = append(a.micNames, d.Name)
+		if d.ID == micID || (micID == "" && d.Default) {
+			a.micIdx = len(a.mics)
+		}
 	}
-	if cerr := file.Close(); err == nil {
-		err = cerr
+	if a.micIdx == 0 && len(a.mics) > 0 {
+		a.micIdx = 1
 	}
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s: %dx%d from \"%s\" (%s, native %s)\n", *out, f.Width, f.Height, cam.Info().Name, cam.Info().Backend, cam.Mode())
-	return nil
+	a.buildModes()
+	a.openCam, a.openMode, a.openMic = -1, -1, -1 // reopen
 }
 
-func parseFormat(s string) (hwcamera.PixelFormat, error) {
-	switch strings.ToLower(s) {
-	case "mjpeg", "mjpg", "jpeg":
-		return hwcamera.MJPEG, nil
-	case "yuyv", "yuy2":
-		return hwcamera.YUYV, nil
-	case "uyvy":
-		return hwcamera.UYVY, nil
-	case "nv12":
-		return hwcamera.NV12, nil
-	case "i420", "yu12":
-		return hwcamera.I420, nil
-	case "bgra":
-		return hwcamera.BGRA, nil
-	case "rgba":
-		return hwcamera.RGBA, nil
+// defaultCamera is the camera Open("") picks: the first physical one.
+func defaultCamera(cams []hwcamera.DeviceInfo) int {
+	for i, d := range cams {
+		if !d.Virtual {
+			return i
+		}
 	}
-	return 0, fmt.Errorf("unknown format %q", s)
+	return 0
 }
 
-func check(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("check", flag.ExitOnError)
-	frames := fs.Int("frames", 60, "frames to capture per test")
-	fs.Parse(args)
-	fmt.Printf("## hwcamera check\n\n- OS: %s/%s\n- Backends: %s\n\n", runtime.GOOS, runtime.GOARCH, strings.Join(hwcamera.Backends(), ", "))
-	ds, err := hwcamera.Devices(ctx)
-	if err != nil {
-		return err
+// buildModes fills the mode menu for the selected camera: every size,
+// largest first, at each frame rate of 15 fps or more.
+func (a *app) buildModes() {
+	var cur mode
+	if a.modeIdx < len(a.modes) {
+		cur = a.modes[a.modeIdx]
+	} else {
+		cur = mode{session.Size{W: 1280, H: 720}, 30}
 	}
-	if len(ds) == 0 {
-		fmt.Println("No cameras found.")
-		return nil
-	}
-	fmt.Println("| Camera | Backend | Request | Native mode | Frames | FPS | Dropped | First frame | Result |")
-	fmt.Println("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-	for _, d := range ds {
-		tests := []struct {
-			name string
-			opts []hwcamera.Option
-		}{
-			{"default NV12", nil},
-			{"RGBA", []hwcamera.Option{hwcamera.WithFormat(hwcamera.RGBA)}},
-		}
-		// The largest mode, natively, to exercise MJPEG where the camera has it.
-		if len(d.Modes) > 0 {
-			best := d.Modes[0]
-			for _, m := range d.Modes {
-				if m.Width*m.Height > best.Width*best.Height {
-					best = m
+	a.modes, a.modeKeys = nil, nil
+	if a.camIdx < len(a.cams) {
+		for _, m := range a.cams[a.camIdx].Modes {
+			rates := m.FrameRates
+			if len(rates) == 0 {
+				rates = []float64{30}
+			}
+			for _, r := range rates {
+				if r < 15 && r != rates[0] {
+					continue
+				}
+				md := mode{session.Size{W: m.Width, H: m.Height}, r}
+				if !slices.Contains(a.modes, md) {
+					a.modes = append(a.modes, md)
 				}
 			}
-			tests = append(tests, struct {
-				name string
-				opts []hwcamera.Option
-			}{fmt.Sprintf("max %s %dx%d", best.Format, best.Width, best.Height),
-				[]hwcamera.Option{hwcamera.WithSize(best.Width, best.Height), hwcamera.WithNativeFormat(best.Format)}})
-		}
-		for _, t := range tests {
-			row := runCheck(ctx, d, t.opts, *frames)
-			fmt.Printf("| %s | %s | %s | %s |\n", d.Name, d.Backend, t.name, row)
 		}
 	}
-	return nil
+	slices.SortStableFunc(a.modes, func(x, y mode) int {
+		if d := y.size.W*y.size.H - x.size.W*x.size.H; d != 0 {
+			return d
+		}
+		return int(y.fps - x.fps)
+	})
+	if len(a.modes) == 0 {
+		a.modes = []mode{{session.Size{W: 1280, H: 720}, 30}}
+	}
+	a.modeIdx = 0
+	best := -1
+	for i, m := range a.modes {
+		a.modeKeys = append(a.modeKeys, fmt.Sprintf("%dx%d @%g fps", m.size.W, m.size.H, m.fps))
+		// Keep the current mode, else the one closest to it.
+		if m == cur {
+			a.modeIdx, best = i, 0
+		} else if best != 0 {
+			d := abs(m.size.W*m.size.H-cur.size.W*cur.size.H)*100 + int(abs(int(m.fps-cur.fps)))
+			if best < 0 || d < best {
+				a.modeIdx, best = i, d
+			}
+		}
+	}
 }
 
-func runCheck(ctx context.Context, d hwcamera.DeviceInfo, opts []hwcamera.Option, n int) string {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(n)*200*time.Millisecond+5*time.Second)
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// settings are the recording settings of the current selections.
+func (a *app) settings() session.Settings {
+	s := session.Defaults()
+	s.Media = mediaChoices[a.mediaIdx]
+	if a.camIdx < len(a.cams) && a.camIdx != defaultCamera(a.cams) {
+		s.Camera = a.cams[a.camIdx].ID
+	}
+	m := a.modes[a.modeIdx]
+	s.Size, s.FPS = m.size, m.fps
+	s.Codec = codecChoices[a.codecIdx]
+	if a.micIdx > 0 {
+		if d := a.mics[a.micIdx-1]; !d.Default {
+			s.Mic = d.ID
+		}
+	}
+	if a.mic != nil {
+		s.Rate, s.Channels = a.mic.m.SampleRate(), a.mic.m.Channels()
+	}
+	s.Output = a.output
+	return s
+}
+
+// syncDevices reopens the camera or the microphone after a selection changed.
+func (a *app) syncDevices() {
+	if a.camIdx != a.openCam {
+		a.buildModes()
+	}
+	if a.camIdx != a.openCam || a.modeIdx != a.openMode {
+		a.openCam, a.openMode = a.camIdx, a.modeIdx
+		if a.cam != nil {
+			a.cam.stop()
+			a.cam = nil
+		}
+		if a.camIdx < len(a.cams) {
+			s := a.settings()
+			s.Camera = a.cams[a.camIdx].ID
+			c, err := startCapture(s)
+			if err != nil {
+				a.status = fmt.Sprintf("%s: %v", a.cams[a.camIdx].Name, err)
+				if errors.Is(err, hwcamera.ErrPermission) {
+					a.status += "\n" + session.Hint("this app (or the terminal running it)")
+				}
+			} else {
+				a.cam = c
+				a.mirror = a.cams[a.camIdx].Position == hwcamera.PositionFront
+				w, h := c.cam.Size()
+				if a.img == nil || a.img.Bounds().Dx() != w || a.img.Bounds().Dy() != h {
+					a.img = ebiten.NewImage(w, h)
+				}
+				a.last = nil
+			}
+		}
+	}
+	if a.micIdx != a.openMic {
+		a.openMic = a.micIdx
+		if a.mic != nil {
+			a.mic.stop()
+			a.mic = nil
+		}
+		if a.micIdx > 0 {
+			s := session.Defaults()
+			s.Mic = a.mics[a.micIdx-1].ID
+			m, err := startMic(s)
+			if err != nil {
+				a.status = fmt.Sprintf("%s: %v", a.mics[a.micIdx-1].Name, err)
+			} else {
+				a.mic = m
+			}
+		}
+	}
+}
+
+func (a *app) closeDevices() {
+	if a.rec != nil {
+		a.stopRecording()
+	}
+	if a.cam != nil {
+		a.cam.stop()
+	}
+	if a.mic != nil {
+		a.mic.stop()
+	}
+}
+
+func (a *app) startRecording() {
+	s := a.settings()
+	if s.Media&session.Video != 0 && a.cam == nil {
+		a.status = "no camera open"
+		return
+	}
+	if s.Media&session.Audio != 0 && a.mic == nil {
+		a.status = "no microphone open"
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(s.Output), 0o755); err != nil {
+		a.status = err.Error()
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	t0 := time.Now()
-	cam, err := hwcamera.Open(ctx, d.ID, opts...)
+	var cam *hwcamera.Camera
+	if a.cam != nil {
+		cam = a.cam.cam
+	}
+	var mic *audio.Mic
+	if a.mic != nil {
+		mic = a.mic.m
+	}
+	r, err := session.StartRecording(ctx, s, cam, mic)
 	if err != nil {
-		return fmt.Sprintf("- | - | - | - | - | open: %v", err)
+		a.status = err.Error()
+		return
 	}
-	defer cam.Close()
-	var first time.Duration
-	var start time.Time
-	var firstSeq, lastSeq uint64
-	got := 0
-	for got < n {
-		f, err := cam.Read(ctx)
-		if err != nil {
-			return fmt.Sprintf("%s | %d | - | - | - | read: %v", cam.Mode(), got, err)
-		}
-		if got == 0 {
-			first = time.Since(t0)
-			start = time.Now()
-			firstSeq = f.Sequence
-		}
-		lastSeq = f.Sequence
-		if err := validate(f, cam.Format()); err != nil {
-			f.Release()
-			return fmt.Sprintf("%s | %d | - | - | - | bad frame: %v", cam.Mode(), got, err)
-		}
-		f.Release()
-		got++
+	if s.Media&session.Video != 0 {
+		a.cam.setRecorder(r)
 	}
-	el := time.Since(start)
-	fps := float64(got-1) / el.Seconds()
-	dropped := int64(lastSeq-firstSeq) - int64(got-1)
-	if dropped < 0 {
-		dropped = 0
+	if s.Media&session.Audio != 0 {
+		a.mic.setWriter(r)
 	}
-	return fmt.Sprintf("%s | %d | %.1f | %d | %s | ok", cam.Mode(), got, fps, dropped, first.Truncate(time.Millisecond))
+	a.rec, a.recStart = r, time.Now()
+	a.status = "recording " + baseNames(r.Files())
 }
 
-func validate(f *hwcamera.Frame, want hwcamera.PixelFormat) error {
-	if f.Format != want {
-		return fmt.Errorf("format %s, want %s", f.Format, want)
+func (a *app) stopRecording() {
+	r := a.rec
+	if r == nil {
+		return
 	}
-	if f.Width <= 0 || f.Height <= 0 || len(f.Planes) == 0 {
-		return fmt.Errorf("empty frame")
+	var errs []string
+	// Detach the recording from both devices before closing it: no write
+	// can come after Close.
+	if a.cam != nil {
+		if _, err := a.cam.setRecorder(nil); err != nil {
+			errs = append(errs, "video: "+err.Error())
+		}
 	}
-	if f.Format != hwcamera.MJPEG && len(f.Planes[0]) < f.Strides[0]*(f.Height-1)+f.Width {
-		return fmt.Errorf("plane 0 is %d bytes for %dx%d stride %d", len(f.Planes[0]), f.Width, f.Height, f.Strides[0])
+	if a.mic != nil {
+		if _, err := a.mic.setWriter(nil); err != nil {
+			errs = append(errs, "audio: "+err.Error())
+		}
+	}
+	if err := r.Close(); err != nil {
+		errs = append(errs, err.Error())
+	}
+	a.rec = nil
+	if len(errs) > 0 {
+		a.status = strings.Join(errs, "\n")
+	} else {
+		a.status = fmt.Sprintf("saved %s (%s) in %s", baseNames(r.Files()), time.Since(a.recStart).Truncate(100*time.Millisecond), filepath.Dir(r.Settings.Output))
+	}
+	// The next recording gets a new name in the same folder.
+	a.output = filepath.Join(filepath.Dir(a.output), session.Stamp("hwcamera"))
+}
+
+func (a *app) snapshot() {
+	if a.last == nil {
+		a.status = "no frame yet"
+		return
+	}
+	path := filepath.Join(filepath.Dir(a.output), session.Stamp("hwcamera")+".png")
+	f, err := os.Create(path)
+	if err == nil {
+		err = png.Encode(f, a.last)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
+		a.status = err.Error()
+		return
+	}
+	a.snapPath = path
+	a.status = "saved " + filepath.Base(path) + " in " + filepath.Dir(path)
+}
+
+func (a *app) Update() error {
+	if a.began.IsZero() {
+		a.began = time.Now()
+	}
+	if a.quitAfter > 0 && time.Since(a.began) > a.quitAfter && (a.shot == "" || a.shotDone) {
+		return ebiten.Termination
+	}
+	a.scale = ebiten.Monitor().DeviceScaleFactor()
+	if a.rec != nil {
+		// A device that fails mid-recording ends it.
+		if (a.cam != nil && a.cam.recErr() != nil) || (a.mic != nil && a.mic.writeErr() != nil) {
+			a.stopRecording()
+		}
+	}
+	a.ui.Update(func(ctx *debugui.Context) error {
+		a.panel(ctx)
+		return nil
+	})
+	if a.rec == nil {
+		a.syncDevices()
+	}
+	if a.cam != nil {
+		if f := a.cam.take(); f != nil {
+			if f.Strides[0] == 4*f.Width && a.img.Bounds().Dx() == f.Width && a.img.Bounds().Dy() == f.Height {
+				a.img.WritePixels(f.Planes[0])
+				if a.last == nil {
+					a.last = image.NewRGBA(image.Rect(0, 0, f.Width, f.Height))
+				}
+				copy(a.last.Pix, f.Planes[0])
+			}
+			f.Release()
+		}
 	}
 	return nil
+}
+
+func (a *app) Draw(screen *ebiten.Image) {
+	sw, sh := screen.Bounds().Dx(), screen.Bounds().Dy()
+	vw := sw - int(panelWidth*a.scale)
+	if a.img != nil && a.cam != nil && vw > 0 {
+		iw, ih := a.img.Bounds().Dx(), a.img.Bounds().Dy()
+		k := min(float64(vw)/float64(iw), float64(sh)/float64(ih))
+		op := &ebiten.DrawImageOptions{Filter: ebiten.FilterLinear}
+		if a.mirror {
+			op.GeoM.Scale(-1, 1)
+			op.GeoM.Translate(float64(iw), 0)
+		}
+		op.GeoM.Scale(k, k)
+		op.GeoM.Translate((float64(vw)-float64(iw)*k)/2, (float64(sh)-float64(ih)*k)/2)
+		screen.DrawImage(a.img, op)
+	}
+	a.ui.Draw(screen)
+	if a.shot != "" && !a.shotDone && a.quitAfter > 0 && time.Since(a.began) > a.quitAfter {
+		a.shotDone = true
+		img := image.NewRGBA(screen.Bounds())
+		screen.ReadPixels(img.Pix)
+		if f, err := os.Create(a.shot); err == nil {
+			png.Encode(f, img)
+			f.Close()
+		}
+	}
+}
+
+// Layout works in device pixels so the preview is sharp on HiDPI screens;
+// the panel is scaled up to match.
+func (a *app) Layout(ow, oh int) (int, int) {
+	s := a.scale
+	if s == 0 {
+		s = 1
+	}
+	return int(float64(ow) * s), int(float64(oh) * s)
 }
