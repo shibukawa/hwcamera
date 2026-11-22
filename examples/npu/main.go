@@ -31,7 +31,7 @@ import (
 func main() {
 	model := flag.String("model", "", "model: .mlpackage / .mlmodelc (Core ML) or .xml (OpenVINO IR)")
 	labelsPath := flag.String("labels", "", "text file with one class name per line")
-	device := flag.String("device", "", "camera ID (hwcamera list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
+	device := flag.String("device", "", "camera ID (hwcamera-cli list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
 	norm := flag.String("norm", "imagenet", "input normalisation: imagenet, unit (0..1), symmetric (-1..1), raw (0..255)")
 	bgr := flag.Bool("bgr", false, "the model takes BGR")
 	top := flag.Int("top", 3, "scores to print per frame")

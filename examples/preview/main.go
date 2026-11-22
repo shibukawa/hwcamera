@@ -276,7 +276,7 @@ func (g *game) maybeShoot(screen *ebiten.Image) {
 func (g *game) Layout(ow, oh int) (int, int) { return ow, oh }
 
 func main() {
-	device := flag.String("device", "", "camera ID (hwcamera list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
+	device := flag.String("device", "", "camera ID (hwcamera-cli list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
 	size := flag.String("size", "1280x720", "capture size")
 	fps := flag.Float64("fps", 30, "capture frame rate")
 	quitAfter := flag.Duration("quit-after", 0, "quit after this long (for scripted checks)")

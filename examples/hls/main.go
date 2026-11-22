@@ -44,7 +44,7 @@ start();
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
-	device := flag.String("device", "", "camera ID (hwcamera list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
+	device := flag.String("device", "", "camera ID (hwcamera-cli list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
 	codecName := flag.String("codec", "h264", "h264 or hevc (HEVC plays in Safari only)")
 	size := flag.String("size", "1280x720", "capture size")
 	fps := flag.Float64("fps", 30, "frame rate")
