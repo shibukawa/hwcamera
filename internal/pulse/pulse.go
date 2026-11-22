@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64 || riscv64 || loong64 || ppc64le || s390x)
+//go:build linux && !android && (amd64 || arm64 || riscv64 || loong64 || ppc64le || s390x)
 
 // Package pulse is the Linux audio capture backend: the PulseAudio client
 // library, loaded at run time with purego. Desktop distributions run

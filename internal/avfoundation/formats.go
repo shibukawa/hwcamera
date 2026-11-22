@@ -1,5 +1,8 @@
-// Package avfoundation is the macOS camera backend. It drives AVFoundation
-// through the Objective-C runtime with purego, so no cgo is needed.
+// Package avfoundation is the macOS and iOS camera backend. It drives
+// AVFoundation through the Objective-C runtime with purego, so the package
+// contains no cgo code (on iOS purego itself needs the cgo runtime,
+// CGO_ENABLED=1). Files built for `darwin && !ios` are macOS-only, files
+// built for `ios` iOS-only.
 //
 // This file holds the platform-independent pieces (four-character code
 // mapping, mode merging, frame duration arithmetic) so they can be unit
@@ -219,3 +222,34 @@ func positionFor(avPos int, kind deviceKind) camera.Position {
 	}
 	return camera.PositionUnknown
 }
+
+// iosType is an iOS capture device type, in order of preference.
+type iosType int
+
+const (
+	iosTypeWide iosType = iota
+	iosTypeUltraWide
+	iosTypeTelephoto
+	iosTypeExternal
+	iosTypeOther
+)
+
+// iosDeviceOrder is the sort key of an iOS camera: by type (wide first:
+// the camera apps expect and +defaultDeviceWithMediaType: returns), then
+// by AVCaptureDevicePosition (back, front, unspecified).
+func iosDeviceOrder(t iosType, avPos int) int {
+	p := 2
+	switch avPos {
+	case avPosBack:
+		p = 0
+	case avPosFront:
+		p = 1
+	}
+	return int(t)*3 + p
+}
+
+// AVCaptureDevicePosition values used by the pure helpers.
+const (
+	avPosBack  = 1
+	avPosFront = 2
+)

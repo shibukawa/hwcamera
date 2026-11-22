@@ -1,6 +1,9 @@
-// Package coreaudio is the macOS audio capture backend: device enumeration
-// through the Core Audio HAL and capture through an AudioQueue input queue,
-// both bound with purego so that no cgo is required.
+// Package coreaudio is the macOS and iOS audio capture backend: capture
+// through an AudioQueue input queue on both; device enumeration through the
+// Core Audio HAL on macOS (files built for `darwin && !ios`) and through
+// AVAudioSession on iOS (files built for `ios`), where the HAL does not
+// exist. Everything is bound with purego, so the package has no cgo code
+// (on iOS purego itself needs CGO_ENABLED=1).
 //
 // This file holds the platform-independent parts (constants, struct
 // layouts, format and timestamp math) so they can be tested anywhere.
@@ -71,6 +74,23 @@ const (
 	kAudioHardwareIllegalOperation int32 = 0x6E6F7065 // 'nope'
 	kAudioDevicePermissionsError   int32 = 0x21686F67 // '!hog'
 	kAudioHardwareNotRunningError  int32 = 0x73746F70 // 'stop'
+)
+
+// AVAuthorizationStatus values (AVCaptureDevice.h).
+const (
+	authNotDetermined = 0
+	authRestricted    = 1
+	authDenied        = 2
+	authAuthorized    = 3
+	authUnknown       = -1 // AVFoundation not available
+)
+
+// AVAudioSessionRecordPermission and AVAudioApplicationRecordPermission
+// (iOS) share these FourCC values.
+const (
+	recordPermissionUndetermined = 0x756e6474 // 'undt'
+	recordPermissionDenied       = 0x64656e79 // 'deny'
+	recordPermissionGranted      = 0x67726e74 // 'grnt'
 )
 
 // kCFStringEncodingUTF8 (CFString.h).

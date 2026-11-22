@@ -4,7 +4,6 @@ package coreaudio
 
 import (
 	"context"
-	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -20,6 +19,32 @@ import (
 // runs in, which macOS asks for on first use. When access is denied the
 // AudioQueue may still run and deliver silence, so Open checks the
 // AVFoundation authorization status first.
+//
+// On iOS and iPadOS (GOOS=ios, CGO_ENABLED=1 for purego) capture is the
+// same AudioQueue, but devices, routing and permission go through
+// AVAudioSession, because the Core Audio HAL does not exist there:
+//
+//   - The app's Info.plist MUST carry NSMicrophoneUsageDescription, or iOS
+//     kills the process when recording is requested. Permission is asked
+//     with AVAudioApplication (iOS 17) or AVAudioSession; a denial is
+//     audio.ErrPermission.
+//   - Devices and Open set the shared audio session's category to
+//     PlayAndRecord (mode Default, options AllowBluetooth and
+//     DefaultToSpeaker) unless the app already chose PlayAndRecord or
+//     Record, which are left as they are. Open activates the session and
+//     never deactivates it (the app may be playing audio through it).
+//     An app that changes the category later (e.g. to Playback or
+//     Ambient) stops the recording.
+//   - Devices lists AVAudioSession.availableInputs (built-in microphone,
+//     wired or Bluetooth headset, USB interfaces); the ID is the port UID.
+//     Default is the preferred input, else the input of the current route.
+//     Open with an ID sets it as the preferred input; Open with "" leaves
+//     the route as it is.
+//   - When an interruption (phone call, Siri, another app's recording)
+//     stops the queue, Read keeps blocking; the queue is started again
+//     when the interruption ends or the app becomes active, and the next
+//     buffer has Discontinuity set. A media services reset ends the
+//     stream with audio.ErrNoDevice.
 type Backend struct{}
 
 func (Backend) Name() string { return Name }
@@ -34,75 +59,11 @@ func osErr(op string, st int32, sentinel error) error {
 	return &audio.BackendError{Backend: Name, Op: op, Code: int64(st), Err: sentinel}
 }
 
-type device struct {
-	info audio.DeviceInfo
-	obj  uint32
-}
-
 func (Backend) Devices(ctx context.Context) ([]audio.DeviceInfo, error) {
 	if err := load(); err != nil {
 		return nil, loadErrWrap(err)
 	}
-	devs, err := listDevices()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]audio.DeviceInfo, len(devs))
-	for i, d := range devs {
-		out[i] = d.info
-	}
-	return out, nil
-}
-
-// listDevices returns the devices with at least one input channel, the
-// default input first.
-func listDevices() ([]device, error) {
-	data, st := propertyData(kAudioObjectSystemObject, kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal)
-	if st != 0 {
-		return nil, osErr("AudioObjectGetPropertyData(devices)", st, nil)
-	}
-	def, st := propertyU32(kAudioObjectSystemObject, kAudioHardwarePropertyDefaultInputDevice, kAudioObjectPropertyScopeGlobal)
-	if st != 0 {
-		def = kAudioObjectUnknown
-	}
-	var out []device
-	for i := 0; i+4 <= len(data); i += 4 {
-		obj := binary.LittleEndian.Uint32(data[i:])
-		cfg, st := propertyData(obj, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput)
-		if st != 0 {
-			continue
-		}
-		ch := inputChannels(cfg)
-		if ch == 0 {
-			continue
-		}
-		uid, st := propertyString(obj, kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal)
-		if st != 0 || uid == "" {
-			continue
-		}
-		name, _ := propertyString(obj, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal)
-		if name == "" {
-			name = uid
-		}
-		rate, st := propertyF64(obj, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)
-		if st != 0 {
-			rate = 0
-		}
-		d := device{obj: obj, info: audio.DeviceInfo{
-			ID:         uid,
-			Name:       name,
-			Backend:    Name,
-			Default:    obj == def,
-			SampleRate: int(rate + 0.5),
-			Channels:   ch,
-		}}
-		if d.info.Default {
-			out = append([]device{d}, out...)
-		} else {
-			out = append(out, d)
-		}
-	}
-	return out, nil
+	return platformDevices()
 }
 
 // authorize makes sure the process may record, asking the user when
@@ -146,6 +107,14 @@ type stream struct {
 
 	closing   atomic.Bool
 	closeOnce sync.Once
+
+	// mu serialises restarting the queue after an interruption (iOS)
+	// against Close.
+	mu sync.Mutex
+	// paused is set while the queue is stopped by an interruption (iOS);
+	// resumed marks the next buffer as a discontinuity.
+	paused  atomic.Bool
+	resumed atomic.Bool
 }
 
 func (Backend) Open(ctx context.Context, id string, cfg audio.Config) (audio.Stream, error) {
@@ -153,25 +122,8 @@ func (Backend) Open(ctx context.Context, id string, cfg audio.Config) (audio.Str
 		return nil, loadErrWrap(err)
 	}
 	cfg.Normalize()
-	if id != "" {
-		devs, err := listDevices()
-		if err != nil {
-			return nil, err
-		}
-		found := false
-		for _, d := range devs {
-			if d.info.ID == id {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, audio.ErrNotFound
-		}
-	} else if def, st := propertyU32(kAudioObjectSystemObject, kAudioHardwarePropertyDefaultInputDevice, kAudioObjectPropertyScopeGlobal); st == 0 && def == kAudioObjectUnknown {
-		return nil, audio.ErrNoDevice
-	}
-	if err := authorize(ctx); err != nil {
+	queueDevice, err := prepareInput(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -198,8 +150,8 @@ func (Backend) Open(ctx context.Context, id string, cfg audio.Config) (audio.Str
 		return nil, osErr(op, st, sentinel)
 	}
 
-	if id != "" {
-		uid := cfStringCreateWithCString(0, id, kCFStringEncodingUTF8)
+	if queueDevice != "" {
+		uid := cfStringCreateWithCString(0, queueDevice, kCFStringEncodingUTF8)
 		if uid == 0 {
 			return fail("CFStringCreateWithCString", 0, audio.ErrNotFound)
 		}
@@ -259,6 +211,8 @@ func (s *stream) Read(ctx context.Context) (*audio.Buffer, error) {
 func (s *stream) Close() error {
 	s.closeOnce.Do(func() {
 		s.closing.Store(true)
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		// Stop and Dispose with immediate=true return after the queue's
 		// callbacks have finished; none run afterwards.
 		audioQueueStop(s.queue, true)
@@ -300,6 +254,9 @@ func onInput(user, aq uintptr, bufRef, tsRef unsafe.Pointer, _ uint32, _ uintptr
 		if tsRef != nil {
 			b.Timestamp, b.Discontinuity = s.clk.next(*(*audioTimeStamp)(tsRef), frames)
 		}
+		if s.resumed.Swap(false) {
+			b.Discontinuity = true
+		}
 		s.ring.Push(b)
 	}
 	if !s.closing.Load() {
@@ -311,7 +268,8 @@ func onInput(user, aq uintptr, bufRef, tsRef unsafe.Pointer, _ uint32, _ uintptr
 //
 //	void (*)(void *inUserData, AudioQueueRef inAQ, AudioQueuePropertyID inID)
 //
-// The queue stops by itself when its device goes away.
+// The queue stops by itself when its device goes away (macOS) or an
+// interruption begins (iOS); queueStopped decides what that means.
 func onProperty(user, aq uintptr, id uint32) {
 	if id != kAudioQueueProperty_IsRunning {
 		return
@@ -329,5 +287,5 @@ func onProperty(user, aq uintptr, id uint32) {
 	if st := audioQueueGetProperty(aq, kAudioQueueProperty_IsRunning, unsafe.Pointer(&running), &size); st != 0 || running != 0 {
 		return
 	}
-	s.ring.Fail(&audio.BackendError{Backend: Name, Op: "AudioQueue stopped", Err: audio.ErrNoDevice})
+	s.queueStopped()
 }

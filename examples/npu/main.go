@@ -31,7 +31,7 @@ import (
 func main() {
 	model := flag.String("model", "", "model: .mlpackage / .mlmodelc (Core ML) or .xml (OpenVINO IR)")
 	labelsPath := flag.String("labels", "", "text file with one class name per line")
-	device := flag.String("device", "", "camera ID; empty for the first camera")
+	device := flag.String("device", "", "camera ID (hwcamera-cli list) or a kind (front, back, back+ultrawide, ...); empty for the default camera")
 	norm := flag.String("norm", "imagenet", "input normalisation: imagenet, unit (0..1), symmetric (-1..1), raw (0..255)")
 	bgr := flag.Bool("bgr", false, "the model takes BGR")
 	top := flag.Int("top", 3, "scores to print per frame")
@@ -134,8 +134,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// RGBA from the camera saves a YUV conversion inside tensor.Fill.
-	cam, err := hwcamera.Open(ctx, *device, hwcamera.WithSize(640, 480), hwcamera.WithFormat(hwcamera.RGBA))
+	// A model takes a few hundred pixels: Low runs the camera at about
+	// 640x480, which tensor.Fill scales down cheaply. RGBA from the camera
+	// saves a YUV conversion inside tensor.Fill.
+	id, kind := *device, hwcamera.Low
+	if k, err := hwcamera.ParseKind(id); err == nil { // -device back, front+high, ...
+		id = ""
+		if k&(hwcamera.Low|hwcamera.Mid|hwcamera.High) != 0 {
+			kind = 0 // the flag chose the resolution
+		}
+		kind |= k
+	}
+	opts := []hwcamera.Option{hwcamera.WithKind(kind), hwcamera.WithFormat(hwcamera.RGBA)}
+	cam, err := hwcamera.Open(ctx, id, opts...)
 	if err != nil {
 		log.Fatal(err)
 	}

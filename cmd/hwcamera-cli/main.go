@@ -94,6 +94,9 @@ func list(ctx context.Context, args []string) error {
 	}
 	for _, d := range ds {
 		tags := []string{d.Backend, d.Position.String()}
+		if d.Lens != hwcamera.LensUnknown {
+			tags = append(tags, d.Lens.String())
+		}
 		if d.Default {
 			tags = append(tags, "default")
 		}
@@ -121,7 +124,7 @@ func parseSize(s string) (int, int, error) {
 
 func snap(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("snap", flag.ExitOnError)
-	device := fs.String("camera", "", "camera ID (see list); empty for the default camera")
+	device := fs.String("camera", "", "camera ID (see list), or a kind such as front, back+ultrawide, low or high+16:9")
 	fs.StringVar(device, "device", "", "same as -camera")
 	size := fs.String("size", "", "WxH (default 1280x720 or nearest)")
 	out := fs.String("o", "frame.png", "output .png or .jpg")
@@ -142,7 +145,12 @@ func snap(ctx context.Context, args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cam, err := hwcamera.Open(ctx, *device, opts...)
+	id := *device
+	if k, err := hwcamera.ParseKind(id); err == nil {
+		id = ""
+		opts = append(opts, hwcamera.WithKind(k))
+	}
+	cam, err := hwcamera.Open(ctx, id, opts...)
 	if err != nil {
 		return err
 	}

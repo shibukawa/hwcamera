@@ -119,3 +119,46 @@ func TestOpenUnknownID(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestOpenWithKind(t *testing.T) {
+	t.Setenv("HWCAMERA_BACKEND", "fake")
+	ctx := context.Background()
+	for _, c := range []struct {
+		id   string
+		kind Kind
+		want string // device ID, or "" for ErrNotFound
+	}{
+		{"", External, "fake0"},
+		{"", External | Physical, "fake0"},
+		{"", Virtual, "vcam"},
+		{"", Front, ""},
+		{"", External | Virtual, ""},
+		{"fake0", External, "fake0"},
+		{"fake0", Front, ""},
+		{"vcam", Physical, ""},
+		{"", Low, "fake0"}, // the fake modes are 64x48
+		{"", External | Low | Landscape | R4_3, "fake0"},
+		{"", High, ""},
+		{"fake0", R16_9, ""},
+		{"", Virtual | Low, "vcam"},
+	} {
+		cam, err := Open(ctx, c.id, WithKind(c.kind))
+		if c.want == "" {
+			if !errors.Is(err, ErrNotFound) {
+				t.Errorf("%q %s: err = %v, want ErrNotFound", c.id, c.kind, err)
+			}
+			if cam != nil {
+				cam.Close()
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%q %s: %v", c.id, c.kind, err)
+			continue
+		}
+		if got := cam.Info().ID; got != c.want {
+			t.Errorf("%q %s: opened %s, want %s", c.id, c.kind, got, c.want)
+		}
+		cam.Close()
+	}
+}
